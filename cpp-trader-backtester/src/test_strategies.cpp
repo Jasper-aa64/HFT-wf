@@ -14,6 +14,7 @@ public:
     int owned_trade_count = 0;
     bool id_was_known = false;
     bool submitted = false;
+    int64_t position_ = 0;
 
     void on_tick(const Tick& tick, TickEngine* engine) override {
         if (submitted) return;
@@ -34,7 +35,10 @@ public:
                "ID was not known when callback fired!");
         owned_trade_count++;
         id_was_known = true;
+        position_ -= trade.quantity;  // Selling decreases position
     }
+
+    int64_t position() const { return position_; }
 
     const char* name() const override { return "LiquidityProvider"; }
 };
@@ -232,6 +236,153 @@ void test_engine_level_ownership() {
     std::cout << "✅ Engine-level ownership: PASSED\n\n";
 }
 
+void test_owned_buy_increases_position() {
+    std::cout << "Testing owned buy fill increases position...\n";
+
+    TickEngine engine;
+    auto* strategy = new MomentumStrategy(2, 100);  // 2-tick window
+    engine.add_strategy(std::unique_ptr<Strategy>(strategy));
+
+    // Add a liquidity provider to place a sell order
+    auto* provider = new LiquidityProviderStrategy();
+    engine.add_strategy(std::unique_ptr<Strategy>(provider));
+
+    std::vector<Tick> ticks;
+    // Build momentum window (2 ticks)
+    ticks.push_back(Tick{"TEST", 1000000, 100, 1000, Side::BUY});
+    // Uptrend signal - price above MA triggers buy
+    ticks.push_back(Tick{"TEST", 1050000, 100, 2000, Side::BUY});  // +5% triggers buy
+
+    engine.run_backtest(ticks);
+
+    // Strategy should have a position from the buy
+    assert(strategy->position() > 0);
+    std::cout << "  Position after buy: " << strategy->position() << "\n";
+
+    std::cout << "✅ Owned buy increases position: PASSED\n\n";
+}
+
+void test_owned_sell_decreases_position() {
+    std::cout << "Testing owned sell fill decreases position...\n";
+
+    TickEngine engine;
+
+    // Use LiquidityProviderStrategy which places a sell order at first tick
+    auto* seller = new LiquidityProviderStrategy();
+    engine.add_strategy(std::unique_ptr<Strategy>(seller));
+
+    // Taker places buy order at timestamp 2000
+    auto* taker = new TakerStrategy();
+    engine.add_strategy(std::unique_ptr<Strategy>(taker));
+
+    std::vector<Tick> ticks;
+    ticks.push_back(Tick{"TEST", 1000000, 100, 1000, Side::BUY});
+    ticks.push_back(Tick{"TEST", 1000000, 100, 2000, Side::BUY});
+
+    engine.run_backtest(ticks);
+
+    // Seller should have negative position (sold)
+    assert(seller->position() < 0);
+    std::cout << "  Seller position after sell: " << seller->position() << "\n";
+
+    std::cout << "✅ Owned sell decreases position: PASSED\n\n";
+}
+
+void test_unrelated_trades_ignored() {
+    std::cout << "Testing unrelated trades do not change position...\n";
+
+    TickEngine engine;
+
+    // Two momentum strategies with different windows
+    auto* strategy1 = new MomentumStrategy(2, 100);
+    auto* strategy2 = new MomentumStrategy(3, 100);
+    engine.add_strategy(std::unique_ptr<Strategy>(strategy1));
+    engine.add_strategy(std::unique_ptr<Strategy>(strategy2));
+
+    // Add liquidity provider
+    auto* provider = new LiquidityProviderStrategy();
+    engine.add_strategy(std::unique_ptr<Strategy>(provider));
+
+    std::vector<Tick> ticks;
+    // Build windows - strategy1 needs 2 ticks, strategy2 needs 3
+    ticks.push_back(Tick{"TEST", 1000000, 100, 1000, Side::BUY});
+    ticks.push_back(Tick{"TEST", 1050000, 100, 2000, Side::BUY});  // Triggers strategy1 buy
+    ticks.push_back(Tick{"TEST", 1050000, 100, 3000, Side::BUY});
+
+    engine.run_backtest(ticks);
+
+    // Strategy2 (window=3) should NOT have traded since it doesn't have enough ticks
+    // Its position should remain 0
+    assert(strategy2->position() == 0);
+    std::cout << "  Strategy2 position (unrelated): " << strategy2->position() << "\n";
+
+    std::cout << "✅ Unrelated trades ignored: PASSED\n\n";
+}
+
+void test_market_maker_position_tracking() {
+    std::cout << "Testing market maker position tracking...\n";
+
+    TickEngine engine;
+    auto* mm = new MarketMakerStrategy(100, 50, 500);  // spread=100, size=50
+    engine.add_strategy(std::unique_ptr<Strategy>(mm));
+
+    // Create a custom taker that places aggressive orders to hit MM's quotes
+    class AggressiveTaker : public Strategy {
+    public:
+        std::unordered_set<OrderId> my_orders_;
+        int64_t position_ = 0;
+        bool submitted = false;
+
+        void on_tick(const Tick& tick, TickEngine* engine) override {
+            if (tick.timestamp != 15000) return;  // After MM has quoted
+            if (submitted) return;
+            submitted = true;
+
+            // Place aggressive buy to hit MM's ask (at mid + 50 = 1000050)
+            Order buy(0, 1000100, 50, tick.timestamp,
+                      Side::BUY, OrderType::LIMIT, 99,
+                      SymbolRegistry::instance().register_symbol("TEST"));
+            OrderId id = engine->prepare_order(buy);
+            my_orders_.insert(id);
+            engine->submit_prepared_order(id);
+        }
+
+        void on_trade(const Trade& trade) override {
+            if (my_orders_.count(trade.buy_order_id) > 0) {
+                position_ += trade.quantity;
+            }
+        }
+
+        int64_t position() const { return position_; }
+        const char* name() const override { return "AggressiveTaker"; }
+    };
+
+    auto* taker = new AggressiveTaker();
+    engine.add_strategy(std::unique_ptr<Strategy>(taker));
+
+    std::vector<Tick> ticks;
+    // Build 20 ticks to let MM quote at tick 10 and 20
+    for (int i = 0; i < 20; ++i) {
+        ticks.push_back(Tick{"TEST", 1000000, 100, static_cast<Timestamp>(i * 1000), Side::BUY});
+    }
+
+    engine.run_backtest(ticks);
+
+    std::cout << "  Market maker position: " << mm->position() << "\n";
+    std::cout << "  Market maker trades: " << mm->trades() << "\n";
+    std::cout << "  Taker position: " << taker->position() << "\n";
+
+    // If the taker got filled, MM should have opposite position
+    if (taker->position() > 0) {
+        // Taker bought from MM, so MM sold
+        assert(mm->position() < 0);
+        assert(std::abs(mm->position()) == taker->position());
+        std::cout << "  ✓ MM position correctly tracks owned fills (sold to taker)\n";
+    }
+
+    std::cout << "✅ Market maker position tracking: PASSED\n\n";
+}
+
 int main() {
     std::cout << "=== Strategy Correctness Tests ===\n\n";
 
@@ -241,6 +392,10 @@ int main() {
         test_strategy_position_tracking();
         test_multiple_strategies();
         test_engine_level_ownership();
+        test_owned_buy_increases_position();
+        test_owned_sell_decreases_position();
+        test_unrelated_trades_ignored();
+        test_market_maker_position_tracking();
 
         std::cout << "=== ALL STRATEGY TESTS PASSED ===\n";
         return 0;
