@@ -1,16 +1,24 @@
 #!/usr/bin/env bash
 #
-# overclock_cli_loop.sh — Overclock Mode CLI Branch with Retry Loop
+# overclock_cli_loop.sh — Overclock Mode CLI with Critic-Prep Checklist
 #
 # Architecture:
-#   Builder  = Claude Code CLI (Read, Edit, Write only — no Bash)
-#   Executor = scripts/ from this project only
-#   Critic   = Codex CLI (structured verdict output)
-#   Human    = reads final decision package
+#   Critic-Prep = Codex CLI (generates checklist before patch)
+#   Builder     = Claude Code CLI (Read, Edit, Write only — no Bash)
+#   Executor    = scripts/ from this project only
+#   Critic-Review = Codex CLI (verifies patch against pre-written checklist)
+#   Human       = reads final decision package
 #
-# Retry Loop:
-#   REJECT → retry with failure evidence → Builder retry → re-run
-#   After max attempts, ESCALATE to human.
+# Flow:
+#   Critic-Prep generates checklist
+#       ↓
+#   (if SETUP_FAILED, stop)
+#       ↓
+#   Builder writes patch → Executor runs → Critic-Review checks against checklist
+#       ↓
+#   REJECT → retry with failure evidence → Builder retry
+#       ↓
+#   Max attempts exhausted → ESCALATE to human
 #
 # Isolation:
 #   Runs in a git worktree to avoid contaminating the main repo.
@@ -405,6 +413,169 @@ echo "✓ Worktree created at: $WORKTREE_PATH"
 # Store original commit for reset
 ORIGINAL_COMMIT=$(git -C "$WORKTREE_PATH" rev-parse HEAD)
 
+# ── Phase 0: Critic-Prep (Generate Checklist) ──────────────────────────────────
+
+echo ""
+echo ">>> Phase 0: Critic-Prep (Generate Checklist)"
+
+# Build critic-prep prompt
+# Include current state of allowed target files if they exist
+cat > "$RUN_DIR/critic_prep_prompt.md" << 'CRITIC_PREP_HEADER'
+You are the Critic-Prep in an Overclock workflow.
+
+Your job: Before any code is written, define what evidence proves the task is complete.
+
+You will receive:
+- Task brief
+- Allowed files list
+- Current contents of target files (if they exist)
+
+Your output will be used by Critic-Review to check if the patch provides evidence.
+
+## Output Format (EXACT)
+
+Generate a checklist where each item:
+1. Is specific and testable
+2. Can be proven by patch content or executor log
+3. Covers acceptance criteria from the brief
+
+Format:
+CRITIC_PREP_HEADER
+
+cat >> "$RUN_DIR/critic_prep_prompt.md" << CRITIC_PREP_BRIEF
+
+## Task Brief
+
+$(cat "$RUN_DIR/brief.md")
+
+## Allowed Files
+
+CRITIC_PREP_BRIEF
+
+cat "$RUN_DIR/allowed_files.txt" >> "$RUN_DIR/critic_prep_prompt.md"
+
+# Add current contents of allowed target files if they exist
+echo "" >> "$RUN_DIR/critic_prep_prompt.md"
+echo "## Current Target File Contents" >> "$RUN_DIR/critic_prep_prompt.md"
+echo "" >> "$RUN_DIR/critic_prep_prompt.md"
+
+while IFS= read -r target_file; do
+    [[ -z "$target_file" ]] && continue
+    # Check in worktree
+    if [[ -f "$WORKTREE_PATH/$target_file" ]]; then
+        echo "### $target_file" >> "$RUN_DIR/critic_prep_prompt.md"
+        echo '```' >> "$RUN_DIR/critic_prep_prompt.md"
+        cat "$WORKTREE_PATH/$target_file" >> "$RUN_DIR/critic_prep_prompt.md"
+        echo '```' >> "$RUN_DIR/critic_prep_prompt.md"
+        echo "" >> "$RUN_DIR/critic_prep_prompt.md"
+    fi
+done < "$RUN_DIR/allowed_files.txt"
+
+cat >> "$RUN_DIR/critic_prep_prompt.md" << 'CRITIC_PREP_FOOTER'
+
+## Checklist Format
+
+Output a markdown checklist. Each item should be:
+- Specific: Can be verified by reading patch or executor log
+- Testable: Has clear pass/fail criteria
+- Complete: Covers all requirements from brief
+
+Example format:
+```markdown
+## Checklist
+
+- [ ] Function `foo` exists in `path/to/file.py`
+- [ ] Function `foo` returns correct result for input X
+- [ ] Test file `test_foo.py` exists
+- [ ] All tests pass (see executor log)
+- [ ] Type hints present on function signature
+```
+
+Now generate the checklist for this task.
+CRITIC_PREP_FOOTER
+
+echo "Running Codex to generate checklist..."
+set +e
+cd "$WORKTREE_PATH"
+codex exec --sandbox read-only --skip-git-repo-check "$(cat "$RUN_DIR/critic_prep_prompt.md")" 2>&1 | tee "$RUN_DIR/critic_checklist.md"
+CRITIC_PREP_EXIT=$?
+set -e
+
+# Handle Critic-Prep failure
+if [[ $CRITIC_PREP_EXIT -ne 0 ]]; then
+    cat > "$RUN_DIR/final_decision.md" << DECISION
+# Final Decision
+
+## Final verdict: SETUP_FAILED
+
+## Reason
+
+Critic-Prep failed with exit code $CRITIC_PREP_EXIT.
+
+The checklist generation phase did not complete successfully.
+Builder was not started.
+No attempts were consumed.
+
+## Critic-Prep Log
+
+See: $RUN_DIR/critic_checklist.md
+
+## Cleanup Commands
+
+To remove the worktree:
+\`\`\`bash
+git worktree remove $WORKTREE_PATH
+git branch -D $WORKTREE_BRANCH
+\`\`\`
+DECISION
+
+    echo ""
+    echo "=== SETUP_FAILED (Critic-Prep Failed) ==="
+    echo "Exit code: $CRITIC_PREP_EXIT"
+    cat "$RUN_DIR/final_decision.md"
+    echo ""
+    echo "Worktree preserved at: $WORKTREE_PATH"
+    echo "To clean up: git worktree remove $WORKTREE_PATH && git branch -D $WORKTREE_BRANCH"
+    rm -f "$ALLOWED_FILES_TMP"
+    exit 1
+fi
+
+# Handle empty checklist
+if [[ ! -s "$RUN_DIR/critic_checklist.md" ]]; then
+    cat > "$RUN_DIR/final_decision.md" << DECISION
+# Final Decision
+
+## Final verdict: SETUP_FAILED
+
+## Reason
+
+Critic-Prep generated an empty checklist.
+
+An empty checklist means Critic-Review has no evidentiary standard.
+Builder was not started.
+No attempts were consumed.
+
+## Cleanup Commands
+
+To remove the worktree:
+\`\`\`bash
+git worktree remove $WORKTREE_PATH
+git branch -D $WORKTREE_BRANCH
+\`\`\`
+DECISION
+
+    echo ""
+    echo "=== SETUP_FAILED (Empty Checklist) ==="
+    cat "$RUN_DIR/final_decision.md"
+    echo ""
+    echo "Worktree preserved at: $WORKTREE_PATH"
+    echo "To clean up: git worktree remove $WORKTREE_PATH && git branch -D $WORKTREE_BRANCH"
+    rm -f "$ALLOWED_FILES_TMP"
+    exit 1
+fi
+
+echo "✓ Checklist generated: $RUN_DIR/critic_checklist.md"
+
 # ── Retry Loop ────────────────────────────────────────────────────────────────
 
 ATTEMPT=1
@@ -661,23 +832,36 @@ RETRY_FOOTER
         fi
     fi
 
-    # ── Phase 3: Critic (Codex) ──────────────────────────────────────────────────
+    # ── Phase 3: Critic-Review (Codex) ─────────────────────────────────────────────
 
     echo ""
-    echo ">>> Phase 3: Critic (Codex)"
+    echo ">>> Phase 3: Critic-Review (Codex)"
 
-    # Build critic prompt
+    # Build critic prompt with pre-written checklist
     cat > "$ATTEMPT_DIR/critic_prompt.md" << 'CRITIC_HEADER'
-You are the Critic in an Overclock workflow.
+You are the Critic-Review in an Overclock workflow.
 You did NOT write this patch.
 
 Default posture: REJECT unless the patch proves itself with evidence.
+
+A checklist was written before the patch was created.
+Your job is to verify that each checklist item has evidence.
 CRITIC_HEADER
 
-    cat >> "$ATTEMPT_DIR/critic_prompt.md" << CRITIC_BODY
+    # Include the pre-written checklist
+    cat >> "$ATTEMPT_DIR/critic_prompt.md" << CRITIC_CHECKLIST
 
-## Task Brief
-$(cat "$RUN_DIR/brief.md")
+## Pre-written Checklist
+
+This checklist was generated BEFORE the patch. You must verify each item.
+
+CRITIC_CHECKLIST
+
+    echo '```' >> "$ATTEMPT_DIR/critic_prompt.md"
+    cat "$RUN_DIR/critic_checklist.md" >> "$ATTEMPT_DIR/critic_prompt.md"
+    echo '```' >> "$ATTEMPT_DIR/critic_prompt.md"
+
+    cat >> "$ATTEMPT_DIR/critic_prompt.md" << CRITIC_BODY
 
 ## Patch Diff
 CRITIC_BODY
@@ -699,14 +883,16 @@ CRITIC_LOG
 
 ## Your Job
 
-1. Write a checklist of what must be proven.
-2. For each checklist item, find evidence in the patch or executor log.
-3. If ANY item lacks evidence, REJECT.
-4. If ALL items have evidence, APPROVE.
+For EACH checklist item above:
+1. Find evidence in the patch or executor log
+2. If ANY checklist item lacks evidence, REJECT
+3. If ALL checklist items have evidence, APPROVE
+
+Do NOT write a new checklist. Use the pre-written checklist above.
 
 ## Output Format (EXACT - use this format)
 
-First, write your analysis.
+First, write your analysis showing evidence for each checklist item.
 
 Then, on the LAST TWO LINES, output EXACTLY:
 
