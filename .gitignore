@@ -2,6 +2,7 @@
 overclock_runs/*
 !overclock_runs/.gitkeep
 !overclock_runs/example-brief.md
+!overclock_runs/test-*.md
 
 # Overclock worktrees
 .overclock_worktrees/
