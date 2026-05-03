@@ -178,6 +178,9 @@ Evidence narrative:
 3. Repeated failure escalates.
 4. Tests can pass while Critic rejects semantic violation.
 5. Critic checklist is generated before Builder patch.
+6. Real sandbox task rejects once, retries, then produces an accepted invariant test.
+7. Follow-up known-issue sweep checks whether the workflow helps find and close
+   existing project bugs, not only validate one isolated patch.
 ```
 
 ---
@@ -254,9 +257,141 @@ deterministic retry
 escalate
 semantic reject
 setup failed handling
+real sandbox integration
+known-issue sweep
+stress test exposes weak executor gate
 ```
 
-### 7. What This Does Not Solve Yet
+Real sandbox evidence:
+
+```text
+Project:
+  cpp-trader-backtester
+
+Task:
+  add volume consistency invariant test
+
+Run:
+  overclock_runs/20260503-205323/
+
+Result:
+  attempt 1 -> REJECT
+  attempt 2 -> APPROVE
+
+Applied patch:
+  b0712a6 feat(cpp-trader): Add volume consistency invariant test
+```
+
+### 7. Known-Issue Sweep: Testing The Workflow Against Existing Bugs
+
+Purpose:
+
+```text
+The first real sandbox task proves Overclock can accept a good narrow patch.
+The next experiment should test whether the workflow is useful for iterating on
+known project problems.
+```
+
+Known issues to sweep:
+
+```text
+1. Add missing best_bid() regression coverage.
+2. Review Tick layout / alignas issue.
+3. Review Strategy fill ownership validation.
+```
+
+Run them as separate briefs, not one large task:
+
+```text
+best_bid coverage:
+  expected to be a small test-only patch
+
+Tick layout:
+  performance / data-layout task, larger risk surface
+
+Strategy fill ownership:
+  semantic correctness task, likely needs careful acceptance criteria
+```
+
+What to measure:
+
+```text
+Did Critic-Prep write a useful checklist?
+Did Builder stay within allowed_files?
+Did Executor catch failures?
+Did Critic reject missing evidence?
+Did retry improve the patch?
+Did the workflow expose gaps in the evaluator or brief?
+```
+
+Stress-test result to include:
+
+```text
+Run:
+  overclock_runs/20260503-214848/
+
+Task:
+  fix strategy-layer accounting and fill ownership
+
+Result:
+  attempt 1 -> REJECT by Critic
+  attempt 2 -> REJECT by Critic
+  attempt 3 -> REJECT by Executor
+  final -> ESCALATE
+
+Why this matters:
+  The failed run exposed a real workflow weakness: the evaluator built tests in
+  Release mode, and the project's Release flags define NDEBUG. Existing
+  assert-based tests were therefore compiled out.
+```
+
+Key lesson:
+
+```text
+An Executor gate is only as strong as the commands it runs.
+
+If tests depend on assert(), running them under -DNDEBUG turns the quality gate
+into a smoke test. For this project, the next Overclock iteration must run
+tests in Debug/ASan or replace critical assertions with explicit runtime
+checks that cannot be compiled out.
+```
+
+Callback timing lesson:
+
+```text
+The strategy accounting task also exposed a design issue:
+
+submit_order()
+  -> add_order()
+    -> match_order()
+      -> execute_trade()
+        -> trade_callback_()      # Strategy::on_trade runs here
+  -> return order_id              # too late for strategy to pre-register id
+
+This is not a multithreaded race. It is synchronous callback ordering /
+reentrancy. Returning the assigned order id is not sufficient if fills can occur
+before the caller receives that id.
+```
+
+How to write this in the article:
+
+```text
+The stress test did not produce an approved patch. That was the useful result.
+It forced the workflow to reveal that the evidence gate itself was too weak.
+Overclock is not only a patch filter; it is a way to debug the quality system
+around the agent.
+```
+
+This section should include a short postmortem after the sweep:
+
+```text
+What worked in the workflow?
+What was too slow?
+Where did the brief need tightening?
+Should the evaluator change before Agent Optimize?
+```
+
+### 8. What This Does Not Solve Yet
 
 Boundaries:
 
@@ -267,7 +402,7 @@ not a proof that agents are correct
 not using Attacker as blocking gate yet
 ```
 
-### 8. Why This Matters For Agent Optimization
+### 9. Why This Matters For Agent Optimization
 
 Bridge to Blog 2:
 
