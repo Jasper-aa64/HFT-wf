@@ -204,6 +204,68 @@ void test_volume_invariant() {
     std::cout << "✅ Volume consistency invariant: PASSED\n\n";
 }
 
+void test_cancel_order_removes_resting_quantity() {
+    std::cout << "Testing cancel_order removes resting quantity...\n";
+
+    OrderBook book("TEST");
+
+    Order buy_low(1, 990000, 50, 1000, Side::BUY, OrderType::LIMIT, 1);
+    Order buy_high(2, 1010000, 100, 2000, Side::BUY, OrderType::LIMIT, 1);
+    Order sell(3, 1020000, 80, 3000, Side::SELL, OrderType::LIMIT, 1);
+
+    book.add_order(&buy_low);
+    book.add_order(&buy_high);
+    book.add_order(&sell);
+
+    assert(book.bid_volume() == 150);
+    assert(book.ask_volume() == 80);
+    assert(book.best_bid() == 1010000);
+    assert(book.best_ask() == 1020000);
+
+    book.cancel_order(2);
+
+    assert(buy_high.status == OrderStatus::CANCELLED);
+    assert(book.bid_volume() == 50);
+    assert(book.best_bid() == 990000);
+    assert(book.ask_volume() == 80);
+    std::cout << "  ✓ Cancelled highest bid and preserved remaining bid/ask volume\n";
+
+    book.cancel_order(3);
+
+    assert(sell.status == OrderStatus::CANCELLED);
+    assert(book.ask_volume() == 0);
+    assert(book.best_ask() == 0);
+    std::cout << "  ✓ Cancelled ask and removed empty ask level\n";
+
+    std::cout << "✅ cancel_order removes resting quantity: PASSED\n\n";
+}
+
+void test_cancel_partially_filled_order_removes_remaining_quantity() {
+    std::cout << "Testing cancel_order removes only remaining partial quantity...\n";
+
+    OrderBook book("TEST");
+
+    Order sell(1, 1000000, 100, 1000, Side::SELL, OrderType::LIMIT, 1);
+    book.add_order(&sell);
+
+    Order buy(2, 1000000, 40, 2000, Side::BUY, OrderType::LIMIT, 2);
+    book.add_order(&buy);
+
+    assert(sell.status == OrderStatus::PARTIAL);
+    assert(sell.filled == 40);
+    assert(book.ask_volume() == 60);
+
+    book.cancel_order(1);
+
+    assert(sell.status == OrderStatus::CANCELLED);
+    assert(sell.filled == 40);
+    assert(book.ask_volume() == 0);
+    assert(book.best_ask() == 0);
+    std::cout << "  ✓ Partial fill preserved and only remaining 60 shares removed\n";
+
+    std::cout << "✅ cancel partially filled order: PASSED\n\n";
+}
+
 int main() {
     std::cout << "=== Order Book Correctness Tests ===\n\n";
 
@@ -213,6 +275,8 @@ int main() {
         test_fifo_ordering();
         test_best_bid_regression();
         test_volume_invariant();
+        test_cancel_order_removes_resting_quantity();
+        test_cancel_partially_filled_order_removes_remaining_quantity();
 
         std::cout << "=== ALL TESTS PASSED ===\n";
         return 0;

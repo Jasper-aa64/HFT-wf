@@ -30,7 +30,31 @@ void OrderBook::add_order(Order* order) {
 }
 
 void OrderBook::cancel_order(OrderId order_id) {
-    // Simplified: In production, maintain order_id -> order* map
+    auto cancel_from_level = [order_id](auto& levels) {
+        for (auto level_it = levels.begin(); level_it != levels.end(); ++level_it) {
+            auto& level = level_it->second;
+            for (auto order_it = level.orders.begin(); order_it != level.orders.end(); ++order_it) {
+                Order* order = *order_it;
+                if (order->id != order_id) continue;
+
+                Quantity remaining = order->quantity - order->filled;
+                if (remaining > 0) {
+                    level.total_quantity -= remaining;
+                }
+                order->status = OrderStatus::CANCELLED;
+                level.orders.erase(order_it);
+
+                if (level.orders.empty()) {
+                    levels.erase(level_it);
+                }
+                return true;
+            }
+        }
+        return false;
+    };
+
+    if (cancel_from_level(bids_)) return;
+    cancel_from_level(asks_);
 }
 
 void OrderBook::process_market_order(Order* order) {
