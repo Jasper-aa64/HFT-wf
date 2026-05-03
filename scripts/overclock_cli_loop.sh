@@ -457,42 +457,64 @@ PROMPT
         PREV_ATTEMPT=$((ATTEMPT - 1))
         PREV_DIR="$RUN_DIR/attempt-$PREV_ATTEMPT"
 
-        cat > "$ATTEMPT_DIR/builder_prompt.md" << PROMPT
+        # Build retry prompt incrementally (like critic_prompt.md)
+        cat > "$ATTEMPT_DIR/builder_prompt.md" << 'RETRY_HEADER'
 You are the Builder in an Overclock workflow.
 
 Previous attempt was rejected.
+RETRY_HEADER
+
+        cat >> "$ATTEMPT_DIR/builder_prompt.md" << RETRY_ATTEMPT
 
 Attempt: $ATTEMPT of $MAX_ATTEMPTS
+RETRY_ATTEMPT
 
-Reason:
-$(cat "$PREV_DIR/summary.txt" 2>/dev/null || echo "Unknown")
+        echo "" >> "$ATTEMPT_DIR/builder_prompt.md"
+        echo "Reason:" >> "$ATTEMPT_DIR/builder_prompt.md"
+        if [[ -f "$PREV_DIR/summary.txt" ]]; then
+            cat "$PREV_DIR/summary.txt" >> "$ATTEMPT_DIR/builder_prompt.md"
+        else
+            echo "Unknown" >> "$ATTEMPT_DIR/builder_prompt.md"
+        fi
 
-$(if [[ -f "$PREV_DIR/eval.log" ]]; then
-echo "Executor log:"
-echo '```'"
-cat "$PREV_DIR/eval.log"
-echo '```'
-fi)
+        # Add executor log if exists
+        if [[ -f "$PREV_DIR/eval.log" ]]; then
+            echo "" >> "$ATTEMPT_DIR/builder_prompt.md"
+            echo "Executor log:" >> "$ATTEMPT_DIR/builder_prompt.md"
+            echo '```' >> "$ATTEMPT_DIR/builder_prompt.md"
+            cat "$PREV_DIR/eval.log" >> "$ATTEMPT_DIR/builder_prompt.md"
+            echo '```' >> "$ATTEMPT_DIR/builder_prompt.md"
+        fi
 
-$(if [[ -f "$PREV_DIR/critic.md" ]]; then
-echo "Critic notes:"
-echo '```'"
-cat "$PREV_DIR/critic.md"
-echo '```'
-fi)
+        # Add critic notes if exists
+        if [[ -f "$PREV_DIR/critic.md" ]]; then
+            echo "" >> "$ATTEMPT_DIR/builder_prompt.md"
+            echo "Critic notes:" >> "$ATTEMPT_DIR/builder_prompt.md"
+            echo '```' >> "$ATTEMPT_DIR/builder_prompt.md"
+            cat "$PREV_DIR/critic.md" >> "$ATTEMPT_DIR/builder_prompt.md"
+            echo '```' >> "$ATTEMPT_DIR/builder_prompt.md"
+        fi
 
-$(if [[ -f "$PREV_DIR/patch.diff" ]]; then
-echo "Previous patch (DO NOT repeat this):"
-echo '```diff'"
-cat "$PREV_DIR/patch.diff"
-echo '```'
-fi)
+        # Add previous patch if exists
+        if [[ -f "$PREV_DIR/patch.diff" ]]; then
+            echo "" >> "$ATTEMPT_DIR/builder_prompt.md"
+            echo "Previous patch (DO NOT repeat this):" >> "$ATTEMPT_DIR/builder_prompt.md"
+            echo '```diff' >> "$ATTEMPT_DIR/builder_prompt.md"
+            cat "$PREV_DIR/patch.diff" >> "$ATTEMPT_DIR/builder_prompt.md"
+            echo '```' >> "$ATTEMPT_DIR/builder_prompt.md"
+        fi
+
+        # Add original task
+        cat >> "$ATTEMPT_DIR/builder_prompt.md" << 'RETRY_TASK'
 
 ---
 
 ## Original Task
+RETRY_TASK
 
-$(cat "$BRIEF_FILE")
+        cat "$BRIEF_FILE" >> "$ATTEMPT_DIR/builder_prompt.md"
+
+        cat >> "$ATTEMPT_DIR/builder_prompt.md" << 'RETRY_FOOTER'
 
 ---
 
@@ -508,7 +530,7 @@ Rules:
 - Do not commit.
 - Do not run broad refactors.
 - After editing, output a summary of changed files.
-PROMPT
+RETRY_FOOTER
     fi
 
     echo "Running Claude Code in worktree..."
