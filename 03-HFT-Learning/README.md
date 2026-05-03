@@ -25,11 +25,34 @@ should be cloned locally, not committed into this repository.
 ```text
 lobsim:
   Learn event streams, L3 order lifecycle, replay determinism, paper execution,
-  and semantic invariants.
+  and semantic invariants. Treat this as the primary HFT learning project, not
+  as the first optimization benchmark target.
 
 limit-order-book:
-  Low-latency optimization target with existing benchmark and profiling support.
+  First Agent Optimize target because the C++ hot path, benchmark, and profiling
+  surface are easier to validate.
 ```
+
+## Dependency Policy
+
+`lobsim` uses Arrow / Parquet for its full data path and examples. Installing
+those packages through Homebrew is acceptable on macOS because the project does
+not currently provide a vcpkg / Conan / CMake preset integration for those
+dependencies.
+
+This dependency friction should not block the overall plan:
+
+```text
+lobsim:
+  architecture and HFT concept study
+
+limit-order-book:
+  first optimization workflow validation
+```
+
+If `lobsim` later becomes an optimization target, the first engineering task
+should be a reproducible core-only build or a stable replay benchmark harness,
+not a blind optimization pass.
 
 ## Validation Status (2026-05-03)
 
@@ -84,4 +107,5 @@ Latency: p50=0.042µs, p90=0.084µs, p99=0.084µs
 ## Recommendation
 
 - **Primary HFT learning**: lobsim (L3 event stream, replay determinism, invariants)
-- **Optimization experiments**: limit-order-book (benchmark works, hot path clear)
+- **First optimization experiment**: limit-order-book (benchmark works, hot path clear)
+- **Later option**: promote lobsim to optimization target only after it has a stable benchmark or replay-invariant harness

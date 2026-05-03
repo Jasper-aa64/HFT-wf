@@ -622,7 +622,7 @@ You are the Builder in an Overclock workflow.
 
 Your job: Write the smallest patch that satisfies the task.
 
-$(cat "$BRIEF_FILE")
+$(cat "$RUN_DIR/brief.md")
 
 Rules:
 - Make the smallest patch that satisfies the task.
@@ -695,7 +695,7 @@ RETRY_ATTEMPT
 ## Original Task
 RETRY_TASK
 
-        cat "$BRIEF_FILE" >> "$ATTEMPT_DIR/builder_prompt.md"
+        cat "$RUN_DIR/brief.md" >> "$ATTEMPT_DIR/builder_prompt.md"
 
         cat >> "$ATTEMPT_DIR/builder_prompt.md" << 'RETRY_FOOTER'
 

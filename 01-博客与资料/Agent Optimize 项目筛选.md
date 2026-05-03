@@ -726,6 +726,23 @@ Cloned:
 主仓库只记录 03-HFT-Learning/README.md 和本筛选文档，不直接提交外部项目源码。
 ```
 
+### 2026-05-03 定位更新
+
+```text
+lobsim:
+  Keep as the HFT learning project.
+  Do not force it to become the first optimization benchmark.
+  Its value is event replay, L3 order lifecycle, paper execution, and invariants.
+
+limit-order-book:
+  Use as the first Agent Optimize target unless local tests or license checks fail.
+  Its value is a clear C++ hot path plus existing benchmark/profiling support.
+
+Dependency policy:
+  Homebrew Arrow/Parquet for lobsim is acceptable for full examples on macOS,
+  but dependency installation should not block the optimization workflow.
+```
+
 ---
 
 ## 13. 下一步 Todo
@@ -733,17 +750,17 @@ Cloned:
 ### 项目验证
 
 - [x] clone `mansoor-mamnoon/limit-order-book`
-- [ ] 确认 `mansoor-mamnoon/limit-order-book` license
-- [ ] 本地 build（Release mode）
-- [ ] 运行 Catch2 tests
-- [ ] 运行 bench_tool，记录 5 次结果
-- [ ] 标记 hot path 文件（BookCore 相关）
+- [ ] 确认 `mansoor-mamnoon/limit-order-book` license（README badge says MIT; local LICENSE file missing）
+- [x] 本地 build（Release mode）
+- [x] 运行 Catch2 tests
+- [x] 运行 bench_tool，记录 5 次结果
+- [x] 标记 hot path 文件（BookCore 相关）
 - [ ] 判断是否适合 allowed_files 划定
 - [x] clone `kpetridis24/lobsim`
-- [ ] 确认 `kpetridis24/lobsim` license
-- [ ] 本地 build（CMake + pybind11）
+- [x] 确认 `kpetridis24/lobsim` license（Apache-2.0）
+- [x] 本地 build（CMake + pybind11 / core target）
 - [ ] 尝试 Python quickstart
-- [ ] 确认 benchmark 工具是否存在，若无则补最小 harness
+- [ ] 确认 benchmark 工具是否存在，若无则补最小 harness（sample parquet data is currently stub-sized）
 - [ ] 定义 replay snapshot invariant
 - [ ] 对比两个项目，做最终选择
 
