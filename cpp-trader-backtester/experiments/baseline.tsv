@@ -1,0 +1,6 @@
+# baseline.tsv — DO NOT MODIFY (used as reference by compare_perf.sh)
+# columns: timestamp | target | metric | value | unit | notes
+2026-05-04T00:00:00	order_book	avg_latency_us_per_order	0.13237	µs/order	Apple clang 21.0.0, -O3 -march=native, commit=1cf3337, median-of-5
+2026-05-04T00:00:00	order_book	throughput_orders_per_sec	3930000	orders/sec	same
+2026-05-04T00:00:00	tick_engine	avg_latency_us_per_tick	0.0523	µs/tick	same
+2026-05-04T00:00:00	memory_pool	avg_latency_ns_per_alloc	3.97	ns/alloc	same

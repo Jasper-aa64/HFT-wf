@@ -47,5 +47,18 @@ echo ""
 echo "=== BENCHMARK SMOKE (Release) ==="
 "$RELEASE_DIR/benchmark" 2>&1
 
+
+# Phase 5: Invariant check (golden diff — always runs)
+echo ""
+echo "=== INVARIANT CHECK ==="
+"$(dirname "$0")/../check_orderbook_invariants.sh"
+
+# Phase 6: Performance regression check (only in optimization mode)
+if [[ "${OPT_MODE:-0}" == "1" ]]; then
+    echo ""
+    echo "=== PERFORMANCE REGRESSION CHECK ==="
+    "$(dirname "$0")/../compare_perf.sh"
+fi
+
 echo ""
 echo "=== ALL GATES PASSED ==="

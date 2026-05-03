@@ -1,0 +1,49 @@
+=== Order Book Correctness Tests ===
+
+Testing partial fill volume tracking...
+  ✓ Initial ask volume: 100
+  ✓ After 30 share fill: 70 (expected 70)
+  ✓ After 40 share fill: 30 (expected 30)
+  ✓ After final fill: 0 (expected 0)
+✅ Partial fill volume tracking: PASSED
+
+Testing multiple price level volume...
+  ✓ Total ask volume: 600
+  ✓ After market sweep: 350 (expected 350)
+✅ Multiple price level volume: PASSED
+
+Testing FIFO price-time priority...
+  Trade 1: 100 @ 100
+  Trade 2: 100 @ 100
+  Trade 3: 50 @ 100
+  ✓ FIFO order preserved
+✅ FIFO price-time priority: PASSED
+
+Testing best_bid() returns highest bid...
+  ✓ After adding high bid: best_bid() = 1020000
+  ✓ After adding low bid: best_bid() = 1020000 (highest, not lowest)
+✅ Scenario 1 (high first, low second): PASSED
+  ✓ After adding low bid: best_bid() = 990000
+  ✓ After adding high bid: best_bid() = 1010000 (highest, not lowest)
+✅ Scenario 2 (low first, high second): PASSED
+✅ best_bid() regression test: PASSED
+
+Testing volume consistency invariant...
+  Initial bid volume: 100
+  Executed: 60 (expected 60)
+  ✓ Executed quantity verified
+  Remaining: 40
+  Original total: 100
+  INVARIANT CHECK: 60 + 40 = 100 PASSED
+✅ Volume consistency invariant: PASSED
+
+Testing cancel_order removes resting quantity...
+  ✓ Cancelled highest bid and preserved remaining bid/ask volume
+  ✓ Cancelled ask and removed empty ask level
+✅ cancel_order removes resting quantity: PASSED
+
+Testing cancel_order removes only remaining partial quantity...
+  ✓ Partial fill preserved and only remaining 60 shares removed
+✅ cancel partially filled order: PASSED
+
+=== ALL TESTS PASSED ===
