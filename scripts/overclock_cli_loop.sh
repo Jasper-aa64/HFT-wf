@@ -10,15 +10,15 @@
 #
 # Isolation:
 #   Runs in a git worktree to avoid contaminating the main repo.
-#   On APPROVE, patch is copied to main worktree for human review.
-#   On REJECT, worktree is simply deleted.
+#   Worktree is preserved after run for human review.
+#   Use --apply to copy approved changes to main worktree.
 #
 # Requirements:
 #   - Must run in a git repository
 #   - Claude Code and Codex CLI must be authenticated
 #
 # Usage:
-#   ./scripts/overclock_cli_loop.sh <brief.md>
+#   ./scripts/overclock_cli_loop.sh [--apply] <brief.md>
 #
 
 set -euo pipefail
@@ -26,6 +26,77 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RUNS_DIR="$PROJECT_ROOT/overclock_runs"
+WORKTREES_DIR="$PROJECT_ROOT/.overclock_worktrees"
+
+# ── Parse Args ────────────────────────────────────────────────────────────────
+
+AUTO_APPLY=0
+BRIEF_FILE=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --apply)
+            AUTO_APPLY=1
+            shift
+            ;;
+        *)
+            BRIEF_FILE="$1"
+            shift
+            ;;
+    esac
+done
+
+if [[ -z "$BRIEF_FILE" ]]; then
+    echo "Usage: $0 [--apply] <brief.md>"
+    echo ""
+    echo "Options:"
+    echo "  --apply    On APPROVE, automatically copy changes to main worktree"
+    echo ""
+    echo "Without --apply, approved changes remain in the worktree for manual review."
+    echo ""
+    echo "Brief format (markdown with frontmatter):"
+    echo ""
+    cat << 'EXAMPLE'
+---
+task: <one-line description>
+allowed_files:
+  - path/to/file1
+  - path/to/file2
+eval_script: scripts/evaluate_xxx.sh
+checklist:
+  - <item 1>
+  - <item 2>
+---
+
+## Task Description
+
+<detailed description>
+
+## Allowed Files
+
+- path/to/file1
+- path/to/file2
+
+## Evaluator Script
+
+scripts/evaluate_xxx.sh
+
+## Checklist
+
+- [ ] Item 1
+- [ ] Item 2
+
+NOTES:
+- eval_script must be a path under scripts/ (security)
+- allowed_files supports glob patterns (e.g., "src/*.cpp")
+EXAMPLE
+    exit 1
+fi
+
+if [[ ! -f "$BRIEF_FILE" ]]; then
+    echo "Error: Brief file not found: $BRIEF_FILE"
+    exit 1
+fi
 
 # ── Helper Functions ──────────────────────────────────────────────────────────
 
@@ -80,17 +151,6 @@ verify_allowed_files() {
     return 0
 }
 
-cleanup_worktree() {
-    local worktree_path="$1"
-    local branch_name="$2"
-
-    if [[ -d "$worktree_path" ]]; then
-        echo "Cleaning up worktree: $worktree_path"
-        git -C "$PROJECT_ROOT" worktree remove --force "$worktree_path" 2>/dev/null || true
-        git -C "$PROJECT_ROOT" branch -D "$branch_name" 2>/dev/null || true
-    fi
-}
-
 # ── Pre-flight Checks ────────────────────────────────────────────────────────
 
 echo "=== Pre-flight Checks ==="
@@ -121,57 +181,12 @@ fi
 echo "✓ Git repository: OK"
 echo "✓ Claude Code: $(claude --version | head -1)"
 echo "✓ Codex CLI: $(codex --version)"
+if [[ $AUTO_APPLY -eq 1 ]]; then
+    echo "✓ Auto-apply: ENABLED"
+else
+    echo "✓ Auto-apply: disabled (use --apply to enable)"
+fi
 echo ""
-
-# ── Args ─────────────────────────────────────────────────────────────────────
-
-if [[ $# -lt 1 ]]; then
-    echo "Usage: $0 <brief.md>"
-    echo ""
-    echo "Brief format (markdown with frontmatter):"
-    echo ""
-    cat << 'EXAMPLE'
----
-task: <one-line description>
-allowed_files:
-  - path/to/file1
-  - path/to/file2
-eval_script: scripts/evaluate_xxx.sh
-checklist:
-  - <item 1>
-  - <item 2>
----
-
-## Task Description
-
-<detailed description>
-
-## Allowed Files
-
-- path/to/file1
-- path/to/file2
-
-## Evaluator Script
-
-scripts/evaluate_xxx.sh
-
-## Checklist
-
-- [ ] Item 1
-- [ ] Item 2
-
-NOTES:
-- eval_script must be a path under scripts/ (security)
-- allowed_files supports glob patterns (e.g., "src/*.cpp")
-EXAMPLE
-    exit 1
-fi
-
-BRIEF_FILE="$1"
-if [[ ! -f "$BRIEF_FILE" ]]; then
-    echo "Error: Brief file not found: $BRIEF_FILE"
-    exit 1
-fi
 
 # ── Parse Brief ───────────────────────────────────────────────────────────────
 
@@ -220,9 +235,9 @@ TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 RUN_DIR="$RUNS_DIR/$TIMESTAMP"
 mkdir -p "$RUN_DIR"
 
-# Create worktree branch
+# Create worktree branch and path
 WORKTREE_BRANCH="overclock/$TIMESTAMP"
-WORKTREE_PATH="$PROJECT_ROOT/.git/worktrees/overclock-$TIMESTAMP"
+WORKTREE_PATH="$WORKTREES_DIR/$TIMESTAMP"
 
 echo "=== OVERCLOCK CLI LOOP ==="
 echo "Time: $TIMESTAMP"
@@ -240,6 +255,9 @@ cp "$ALLOWED_FILES_TMP" "$RUN_DIR/allowed_files.txt"
 echo ""
 echo ">>> Creating isolated worktree..."
 
+# Ensure worktrees directory exists
+mkdir -p "$WORKTREES_DIR"
+
 # Create a new branch for this run
 git -C "$PROJECT_ROOT" branch "$WORKTREE_BRANCH" 2>/dev/null || {
     echo "ERROR: Failed to create branch $WORKTREE_BRANCH"
@@ -255,10 +273,7 @@ git -C "$PROJECT_ROOT" worktree add "$WORKTREE_PATH" "$WORKTREE_BRANCH" 2>/dev/n
     exit 1
 }
 
-echo "✓ Worktree created"
-
-# Cleanup trap
-trap 'cleanup_worktree "$WORKTREE_PATH" "$WORKTREE_BRANCH"' EXIT
+echo "✓ Worktree created at: $WORKTREE_PATH"
 
 # ── Phase 1: Builder (Claude Code) ───────────────────────────────────────────
 
@@ -301,12 +316,27 @@ if [[ $CLAUDE_EXIT -ne 0 ]]; then
     echo "Builder exited with code $CLAUDE_EXIT"
 fi
 
-# Capture patch and changes
-git -C "$WORKTREE_PATH" diff > "$RUN_DIR/patch.diff"
+# Capture changed tracked files
 git -C "$WORKTREE_PATH" diff --name-only > "$RUN_DIR/changed_files.txt"
 
-# Also capture new (untracked) files
+# Capture new (untracked) files
 git -C "$WORKTREE_PATH" ls-files --others --exclude-standard > "$RUN_DIR/new_files.txt" || true
+
+# Combine for scope check
+cat "$RUN_DIR/changed_files.txt" "$RUN_DIR/new_files.txt" 2>/dev/null | sort -u > "$RUN_DIR/all_changed_files.txt" || true
+
+# Create comprehensive patch that includes new files
+# Use 'git add -N' to stage new files without content, then diff
+if [[ -s "$RUN_DIR/new_files.txt" ]]; then
+    echo "Including new files in patch..."
+    while IFS= read -r newfile; do
+        [[ -z "$newfile" ]] && continue
+        git -C "$WORKTREE_PATH" add -N "$newfile" 2>/dev/null || true
+    done < "$RUN_DIR/new_files.txt"
+fi
+
+# Now capture full diff (including new files)
+git -C "$WORKTREE_PATH" diff > "$RUN_DIR/patch.diff"
 
 echo ""
 echo "Patch saved: $RUN_DIR/patch.diff"
@@ -316,7 +346,7 @@ echo "New files:"
 cat "$RUN_DIR/new_files.txt" | sed 's/^/  /' || echo "  (none)"
 
 # Check if patch is empty
-if [[ ! -s "$RUN_DIR/patch.diff" ]] && [[ ! -s "$RUN_DIR/new_files.txt" ]]; then
+if [[ ! -s "$RUN_DIR/patch.diff" ]]; then
     echo ""
     echo "WARNING: Empty patch - no changes detected"
 fi
@@ -325,9 +355,6 @@ fi
 
 echo ""
 echo ">>> Scope Verification"
-
-# Combine changed and new files for scope check
-cat "$RUN_DIR/changed_files.txt" "$RUN_DIR/new_files.txt" 2>/dev/null | sort -u > "$RUN_DIR/all_changed_files.txt" || true
 
 if ! verify_allowed_files "$RUN_DIR/all_changed_files.txt" "$RUN_DIR/allowed_files.txt"; then
     cat > "$RUN_DIR/decision.md" << DECISION
@@ -348,7 +375,9 @@ DECISION
     echo ""
     echo "=== REJECTED (Scope Violation) ==="
     cat "$RUN_DIR/decision.md"
-    # Worktree will be cleaned by trap
+    echo ""
+    echo "Worktree preserved at: $WORKTREE_PATH"
+    echo "To clean up: git worktree remove $WORKTREE_PATH && git branch -D $WORKTREE_BRANCH"
     exit 1
 fi
 
@@ -404,6 +433,9 @@ DECISION
     echo ""
     echo "=== REJECTED (Executor Failed) ==="
     cat "$RUN_DIR/decision.md"
+    echo ""
+    echo "Worktree preserved at: $WORKTREE_PATH"
+    echo "To clean up: git worktree remove $WORKTREE_PATH && git branch -D $WORKTREE_BRANCH"
     exit $EVAL_EXIT
 fi
 
@@ -508,8 +540,9 @@ See: $RUN_DIR/builder.log
 - Script: $EVAL_SCRIPT
 - Log: $RUN_DIR/eval.log
 
-## Critic Review
-$(cat "$RUN_DIR/critic.md")
+## Critic Result
+- Exit code: $CODEX_EXIT
+- Log: $RUN_DIR/critic.md
 
 ## Artifacts
 - brief.md
@@ -518,7 +551,12 @@ $(cat "$RUN_DIR/critic.md")
 - eval.log
 - critic.md
 - changed_files.txt
+- new_files.txt
 - allowed_files.txt
+
+## Worktree
+- Path: $WORKTREE_PATH
+- Branch: $WORKTREE_BRANCH
 DECISION
 
 echo ""
@@ -528,45 +566,62 @@ echo "Decision package: $RUN_DIR/decision.md"
 echo ""
 
 if [[ "$VERDICT" == "APPROVE" ]]; then
-    # Copy patch back to main repo for human review
-    echo "Copying approved changes to main worktree..."
+    if [[ $AUTO_APPLY -eq 1 ]]; then
+        echo "Auto-applying approved changes to main worktree..."
 
-    # Apply the patch to main repo
-    if [[ -s "$RUN_DIR/patch.diff" ]]; then
-        git -C "$PROJECT_ROOT" apply "$RUN_DIR/patch.diff" || {
-            echo "WARNING: Could not apply patch to main worktree"
-            echo "Patch is saved at: $RUN_DIR/patch.diff"
-        }
+        # Apply the patch to main repo
+        if [[ -s "$RUN_DIR/patch.diff" ]]; then
+            git -C "$PROJECT_ROOT" apply "$RUN_DIR/patch.diff" || {
+                echo ""
+                echo "ERROR: Could not apply patch to main worktree"
+                echo "Patch is saved at: $RUN_DIR/patch.diff"
+                echo "Apply manually with: git apply $RUN_DIR/patch.diff"
+            }
+        fi
+
+        # Copy new files
+        if [[ -s "$RUN_DIR/new_files.txt" ]]; then
+            while IFS= read -r newfile; do
+                [[ -z "$newfile" ]] && continue
+                mkdir -p "$PROJECT_ROOT/$(dirname "$newfile")"
+                cp "$WORKTREE_PATH/$newfile" "$PROJECT_ROOT/$newfile"
+            done < "$RUN_DIR/new_files.txt"
+        fi
+
+        cat "$RUN_DIR/decision.md"
+
+        echo ""
+        echo "Approved changes applied to main worktree."
+        echo "Review and commit if acceptable:"
+        echo "  git add -A && git commit -m 'feat: <message>'"
+        echo ""
+        echo "Or discard:"
+        echo "  git checkout -- . && git clean -fd"
+    else
+        cat "$RUN_DIR/decision.md"
+
+        echo ""
+        echo "=== APPROVED - Manual Action Required ==="
+        echo ""
+        echo "Worktree with approved changes: $WORKTREE_PATH"
+        echo "Branch: $WORKTREE_BRANCH"
+        echo ""
+        echo "To apply to main worktree:"
+        echo "  cd $PROJECT_ROOT"
+        echo "  git apply $RUN_DIR/patch.diff"
+        echo "  # Or copy new files manually from $WORKTREE_PATH"
+        echo ""
+        echo "To clean up worktree after applying:"
+        echo "  git worktree remove $WORKTREE_PATH"
+        echo "  git branch -D $WORKTREE_BRANCH"
     fi
-
-    # Copy new files
-    if [[ -s "$RUN_DIR/new_files.txt" ]]; then
-        while IFS= read -r newfile; do
-            [[ -z "$newfile" ]] && continue
-            mkdir -p "$PROJECT_ROOT/$(dirname "$newfile")"
-            cp "$WORKTREE_PATH/$newfile" "$PROJECT_ROOT/$newfile"
-        done < "$RUN_DIR/new_files.txt"
-    fi
-
-    cat "$RUN_DIR/decision.md"
-
-    echo ""
-    echo "Approved changes applied to main worktree."
-    echo "Review and commit if acceptable:"
-    echo "  git add -A && git commit -m 'feat: <message>'"
-    echo ""
-    echo "Or discard:"
-    echo "  git checkout -- . && git clean -fd"
-
-    # Disable cleanup trap - we want to keep the worktree for now
-    # Actually, clean up the worktree since changes are in main now
-    trap - EXIT
-    cleanup_worktree "$WORKTREE_PATH" "$WORKTREE_BRANCH"
 else
     cat "$RUN_DIR/decision.md"
     echo ""
-    echo "Changes rejected. Worktree will be cleaned up."
-    # Trap will clean up automatically
+    echo "=== REJECTED ==="
+    echo ""
+    echo "Worktree preserved for inspection: $WORKTREE_PATH"
+    echo "To clean up: git worktree remove $WORKTREE_PATH && git branch -D $WORKTREE_BRANCH"
 fi
 
 # Cleanup temp files

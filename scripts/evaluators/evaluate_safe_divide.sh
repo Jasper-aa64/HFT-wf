@@ -6,40 +6,49 @@
 #   OVERCLOCK_WORKTREE - path to the worktree where changes were made
 #   OVERCLOCK_PROJECT_ROOT - path to main project root
 #
-# This script should check files in OVERCLOCK_WORKTREE (if set) or current dir.
+# This script ONLY checks - it does NOT create or modify any files.
 #
 
 set -euo pipefail
 
 # Determine where to run
 if [[ -n "${OVERCLOCK_WORKTREE:-}" ]]; then
-    cd "$OVERCLOCK_WORKTREE"
+    WORK_DIR="$OVERCLOCK_WORKTREE"
+else
+    WORK_DIR="$(pwd)"
 fi
 
-PROJECT_ROOT="${OVERCLOCK_WORKTREE:-$(pwd)}"
-
 echo "=== Evaluator: safe_divide ==="
-echo "Working directory: $PROJECT_ROOT"
+echo "Working directory: $WORK_DIR"
 echo ""
 
-# Create test directory if needed
-mkdir -p "$PROJECT_ROOT/python-utils"
+# Check if python-utils directory exists
+if [[ ! -d "$WORK_DIR/python-utils" ]]; then
+    echo "FAIL: python-utils/ directory not found"
+    echo "Builder should create: python-utils/safe_math.py"
+    echo "Builder should create: python-utils/test_safe_math.py"
+    exit 1
+fi
 
 # Check if safe_math.py exists
-if [[ ! -f "$PROJECT_ROOT/python-utils/safe_math.py" ]]; then
+if [[ ! -f "$WORK_DIR/python-utils/safe_math.py" ]]; then
     echo "FAIL: python-utils/safe_math.py not found"
     exit 1
 fi
+echo "✓ Found: python-utils/safe_math.py"
 
 # Check if test file exists
-if [[ ! -f "$PROJECT_ROOT/python-utils/test_safe_math.py" ]]; then
+if [[ ! -f "$WORK_DIR/python-utils/test_safe_math.py" ]]; then
     echo "FAIL: python-utils/test_safe_math.py not found"
     exit 1
 fi
+echo "✓ Found: python-utils/test_safe_math.py"
 
 # Run the test
+echo ""
 echo "Running tests..."
-python3 "$PROJECT_ROOT/python-utils/test_safe_math.py"
+cd "$WORK_DIR"
+python3 python-utils/test_safe_math.py
 
 echo ""
 echo "=== All tests passed ==="

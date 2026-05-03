@@ -3,6 +3,9 @@ overclock_runs/*
 !overclock_runs/.gitkeep
 !overclock_runs/example-brief.md
 
+# Overclock worktrees
+.overclock_worktrees/
+
 # OS files
 .DS_Store
 
