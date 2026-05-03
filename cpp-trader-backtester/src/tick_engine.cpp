@@ -41,13 +41,36 @@ void TickEngine::submit_order(const Order& order_template) {
     *order = order_template;
     order->id = next_order_id_++;
     order->timestamp = current_time_;
-    
+
     // Route to the correct book via SymbolId — O(1), no string lookup
     SymbolId sid = order->symbol_id;
     if (sid < book_by_id_.size() && book_by_id_[sid] != nullptr) {
         book_by_id_[sid]->add_order(order);
         ++stats_.orders_submitted;
     }
+}
+
+OrderId TickEngine::prepare_order(const Order& order_template) {
+    OrderId id = next_order_id_++;
+    pending_orders_[id] = order_template;
+    return id;
+}
+
+void TickEngine::submit_prepared_order(OrderId id) {
+    auto it = pending_orders_.find(id);
+    if (it == pending_orders_.end()) return;
+
+    Order* order = order_pool_.allocate();
+    *order = it->second;
+    order->id = id;
+    order->timestamp = current_time_;
+
+    SymbolId sid = order->symbol_id;
+    if (sid < book_by_id_.size() && book_by_id_[sid] != nullptr) {
+        book_by_id_[sid]->add_order(order);
+        ++stats_.orders_submitted;
+    }
+    pending_orders_.erase(it);
 }
 
 void TickEngine::run_backtest(const std::vector<Tick>& ticks) {

@@ -20,6 +20,10 @@ public:
     void process_tick(const Tick& tick);
     void submit_order(const Order& order);
     void run_backtest(const std::vector<Tick>& ticks);
+
+    // Two-phase order submission for ownership tracking
+    OrderId prepare_order(const Order& order_template);
+    void submit_prepared_order(OrderId id);
     
     // Strategy management
     void add_strategy(std::unique_ptr<Strategy> strategy);
@@ -47,6 +51,7 @@ private:
     std::vector<OrderBook*> book_by_id_;  // SymbolId → OrderBook*, O(1) routing
     std::vector<std::unique_ptr<Strategy>> strategies_;
     MemoryPool<Order> order_pool_;
+    std::unordered_map<OrderId, Order> pending_orders_;  // Prepared orders awaiting submit
     OrderId next_order_id_ = 1;
     Timestamp current_time_ = 0;
     Stats stats_;

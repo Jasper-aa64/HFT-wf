@@ -3,8 +3,74 @@
 #include <iostream>
 #include <cassert>
 #include <cmath>
+#include <unordered_set>
 
 using namespace trading;
+
+// Test strategy that provides liquidity (places sell order)
+class LiquidityProviderStrategy : public Strategy {
+public:
+    std::unordered_set<OrderId> owned_orders_;
+    int owned_trade_count = 0;
+    bool id_was_known = false;
+    bool submitted = false;
+
+    void on_tick(const Tick& tick, TickEngine* engine) override {
+        if (submitted) return;
+        submitted = true;
+
+        Order sell(0, tick.price, 100, tick.timestamp,
+                   Side::SELL, OrderType::LIMIT, 99,
+                   SymbolRegistry::instance().register_symbol("TEST"));
+        OrderId id = engine->prepare_order(sell);
+        owned_orders_.insert(id);
+        engine->submit_prepared_order(id);
+    }
+
+    void on_trade(const Trade& trade) override {
+        if (owned_orders_.count(trade.sell_order_id) == 0) return;
+
+        assert(owned_orders_.count(trade.sell_order_id) > 0 &&
+               "ID was not known when callback fired!");
+        owned_trade_count++;
+        id_was_known = true;
+    }
+
+    const char* name() const override { return "LiquidityProvider"; }
+};
+
+// Test strategy that takes liquidity (places buy order)
+class TakerStrategy : public Strategy {
+public:
+    std::unordered_set<OrderId> owned_orders_;
+    int owned_trade_count = 0;
+    bool id_was_known = false;
+    bool submitted = false;
+
+    void on_tick(const Tick& tick, TickEngine* engine) override {
+        if (tick.timestamp != 2000) return;
+        if (submitted) return;
+        submitted = true;
+
+        Order buy(0, tick.price, 50, tick.timestamp,
+                  Side::BUY, OrderType::LIMIT, 99,
+                  SymbolRegistry::instance().register_symbol("TEST"));
+        OrderId id = engine->prepare_order(buy);
+        owned_orders_.insert(id);
+        engine->submit_prepared_order(id);
+    }
+
+    void on_trade(const Trade& trade) override {
+        if (owned_orders_.count(trade.buy_order_id) == 0) return;
+
+        assert(owned_orders_.count(trade.buy_order_id) > 0 &&
+               "ID was not known when callback fired!");
+        owned_trade_count++;
+        id_was_known = true;
+    }
+
+    const char* name() const override { return "Taker"; }
+};
 
 void test_momentum_strategy_signals() {
     std::cout << "Testing momentum strategy signal generation...\n";
@@ -111,43 +177,71 @@ void test_strategy_position_tracking() {
 
 void test_multiple_strategies() {
     std::cout << "Testing multiple concurrent strategies...\n";
-    
+
     TickEngine engine;
     engine.add_strategy(std::make_unique<MomentumStrategy>(10, 100));
     engine.add_strategy(std::make_unique<MarketMakerStrategy>(500, 25, 300));
-    
+
     // Generate mixed market conditions
     std::vector<Tick> ticks;
     Price price = 1000000;
-    
+
     for (int i = 0; i < 200; ++i) {
         // Add some volatility
         price += (i % 3 == 0) ? 1000 : -500;
         ticks.push_back(Tick{"TEST", price, 100, static_cast<Timestamp>(i * 1000), Side::BUY});
     }
-    
+
     engine.run_backtest(ticks);
-    
+
     const auto& stats = engine.get_stats();
     std::cout << "  Ticks processed: " << stats.ticks_processed << "\n";
     std::cout << "  Orders submitted: " << stats.orders_submitted << "\n";
     std::cout << "  Trades executed: " << stats.trades_executed << "\n";
-    
+
     assert(stats.ticks_processed == 200);
     assert(stats.orders_submitted > 0);  // Both strategies should trade
-    
+
     std::cout << "✅ Multiple strategies: PASSED\n\n";
+}
+
+void test_engine_level_ownership() {
+    std::cout << "Testing engine-level ownership tracking...\n";
+
+    TickEngine engine;
+    auto* provider = new LiquidityProviderStrategy();
+    auto* taker = new TakerStrategy();
+    engine.add_strategy(std::unique_ptr<Strategy>(provider));
+    engine.add_strategy(std::unique_ptr<Strategy>(taker));
+
+    std::vector<Tick> ticks;
+    ticks.push_back(Tick{"TEST", 1000000, 100, 1000, Side::BUY});
+    ticks.push_back(Tick{"TEST", 1000000, 100, 2000, Side::BUY});
+
+    engine.run_backtest(ticks);
+
+    assert(provider->owned_trade_count == 1);
+    assert(taker->owned_trade_count == 1);
+    assert(provider->id_was_known == true);
+    assert(taker->id_was_known == true);
+
+    const auto& stats = engine.get_stats();
+    assert(stats.orders_submitted == 2);
+    assert(stats.trades_executed == 1);
+
+    std::cout << "✅ Engine-level ownership: PASSED\n\n";
 }
 
 int main() {
     std::cout << "=== Strategy Correctness Tests ===\n\n";
-    
+
     try {
         test_momentum_strategy_signals();
         test_market_maker_quoting();
         test_strategy_position_tracking();
         test_multiple_strategies();
-        
+        test_engine_level_ownership();
+
         std::cout << "=== ALL STRATEGY TESTS PASSED ===\n";
         return 0;
     } catch (const std::exception& e) {
