@@ -37,7 +37,13 @@
       "Bash(bash -n)",
       "Bash(shellcheck /Users/mac/Desktop/Quant/scripts/overclock_cli_loop.sh)",
       "Bash(bash *)",
-      "Bash(awk NR>=469 && NR<=512 *)"
+      "Bash(awk NR>=469 && NR<=512 *)",
+      "Bash(mkdir -p /tmp/overclock-bad-patch)",
+      "Bash(cat)",
+      "Read(//tmp/**)",
+      "Bash(export OVERCLOCK_WORKTREE=\"$WORKTREE\")",
+      "Bash(export OVERCLOCK_PROJECT_ROOT=\"/Users/mac/Desktop/Quant\")",
+      "Bash(/Users/mac/Desktop/Quant/scripts/evaluators/evaluate_semantic_critic.sh)"
     ]
   }
 }
