@@ -182,11 +182,13 @@ verify_allowed_files() {
 # Reset worktree to original state for retry
 reset_worktree() {
     local worktree_path="$1"
+    local original_commit="$2"
     echo "Resetting worktree for next attempt..."
-    # Discard all changes (tracked and untracked)
-    git -C "$worktree_path" checkout -- . 2>/dev/null || true
+    # Hard reset to original commit to clear index state from git add -N
+    git -C "$worktree_path" reset --hard "$original_commit" 2>/dev/null || true
+    # Remove untracked files
     git -C "$worktree_path" clean -fd 2>/dev/null || true
-    echo "✓ Worktree reset to clean state"
+    echo "✓ Worktree reset to clean state at $original_commit"
 }
 
 # Write attempt decision
@@ -422,7 +424,7 @@ while [[ $ATTEMPT -le $MAX_ATTEMPTS ]]; do
 
     # Reset worktree for retry (except first attempt)
     if [[ $ATTEMPT -gt 1 ]]; then
-        reset_worktree "$WORKTREE_PATH"
+        reset_worktree "$WORKTREE_PATH" "$ORIGINAL_COMMIT"
     fi
 
     # ── Phase 1: Builder (Claude Code) ───────────────────────────────────────────
