@@ -43,7 +43,8 @@
       "Read(//tmp/**)",
       "Bash(export OVERCLOCK_WORKTREE=\"$WORKTREE\")",
       "Bash(export OVERCLOCK_PROJECT_ROOT=\"/Users/mac/Desktop/Quant\")",
-      "Bash(/Users/mac/Desktop/Quant/scripts/evaluators/evaluate_semantic_critic.sh)"
+      "Bash(/Users/mac/Desktop/Quant/scripts/evaluators/evaluate_semantic_critic.sh)",
+      "Bash(codex exec *)"
     ]
   }
 }
