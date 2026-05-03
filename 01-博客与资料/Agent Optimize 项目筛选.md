@@ -4,11 +4,14 @@
 >
 > **最终决定 (2026-05-03)**：
 > - **HFT 学习主项目**：`kpetridis24/lobsim` — L3 replay / simulator / event stream
-> - **Optimize 候选**：`mansoor-mamnoon/limit-order-book` — benchmark/tests/profiling 现成
+> - **First Optimize target**：`mansoor-mamnoon/limit-order-book` — clearer hot path, runnable benchmark, lower dependency friction
 > - **架构旁读**：`PandoraTrader` — 国内期货、CTP、实盘/回测分层
 > - **Overclock sandbox**：`cpp-trader-backtester` — 博客 1 质量门禁
 >
 > **选择理由**：兼顾"学 HFT"而不只是"做一次好看的优化实验"。
+
+> **Updated implementation stance (2026-05-03)**:
+> `lobsim` should be treated as the primary HFT learning project, not as the first optimization benchmark target. Its L3 replay model, deterministic event stream, and paper execution engine are more valuable for building the mental map needed to understand Jane Street-style correctness discussions and 愚夫一得-style domestic trading-system architecture notes. `limit-order-book` should be validated first for the Agent Optimize workflow because it has a smaller optimization surface, a clearer C++ hot path, and a benchmark path that is already easier to run.
 
 ---
 
@@ -17,8 +20,8 @@
 | 用途 | 推荐项目 | 理由 |
 |---|---|---|
 | HFT 架构学习主项目 | `kpetridis24/lobsim` | L3 replay / simulator / event stream，更能补交易系统理解 |
-| Agent Optimize 候选 A | `kpetridis24/lobsim` | 如果 benchmark 能补起来，学习和实验统一 |
-| Agent Optimize 候选 B | `mansoor-mamnoon/limit-order-book` | benchmark/tests/profiling 更现成，适合写优化实验 |
+| Agent Optimize 主候选 | `mansoor-mamnoon/limit-order-book` | benchmark/tests/profiling 更现成，适合先接入优化闭环 |
+| Agent Optimize 备选 | `kpetridis24/lobsim` | 如果后续补出稳定 benchmark，可升级为优化实验项目 |
 | 国内交易系统旁读 | `PandoraTrader` | 学 CTP、实盘/回测分层、策略接口，不作为优化目标 |
 | Overclock sandbox | `cpp-trader-backtester` | 博客 1 质量门禁，不参与博客 2 选型 |
 
@@ -48,13 +51,25 @@ Goal: 学 HFT 系统里的事件流、L3 book、replay、paper execution、invar
 Output: 一张架构图 + 一组 semantic invariants。
 
 Phase 2: Local verification
-Goal: clone/build/test/run quickstart，确认能不能作为 Blog 2 主项目。
-If benchmark 可用或容易补：选 lobsim。
-If benchmark 太弱：保留 lobsim 作为学习项目，切 mansoor 做 optimize 实验。
+Goal: clone/build/test/run quickstart，确认两个项目各自承担什么角色。
+lobsim remains the learning project even if its benchmark path is weak.
+limit-order-book is the first optimization candidate unless local validation fails.
 
 Phase 3: Optimize experiment
-Goal: 在选定项目上做 agent-assisted optimization。
+Goal: first run agent-assisted optimization on the clearer benchmark target.
 Must have: baseline benchmark + invariant gate + allowed_files。
+```
+
+**Dependency policy:**
+
+`lobsim` currently depends on system-level Arrow / Parquet packages for its full examples and data path. Installing them with Homebrew is acceptable on macOS, but it should not block the learning plan. If Arrow / Parquet becomes slow or fragile, treat that as dependency-integration friction and continue with:
+
+```text
+lobsim:
+  study architecture, event lifecycle, replay determinism, and invariants
+
+limit-order-book:
+  run the first optimization workflow because build / benchmark feedback is faster
 ```
 
 ---
@@ -226,6 +241,22 @@ select project
 
 **当前判断**：**优先验证 #1**
 
+**Updated role after local setup (2026-05-03)**:
+
+```text
+Primary role:
+  First Agent Optimize target.
+
+Why:
+  The benchmark path is already more practical, the hot path is concentrated
+  around BookCore / book_core.cpp, and the project is small enough for an
+  evidence-based optimization loop.
+
+Risk to resolve before blogging:
+  License metadata needs confirmation because the README badge says MIT but
+  the local clone does not currently expose a LICENSE file.
+```
+
 ---
 
 ### 4.2 kpetridis24/lobsim
@@ -261,6 +292,23 @@ select project
 - 需要确认本地 build 是否顺畅（依赖 pybind11）
 
 **当前判断**：**优先验证 #2**
+
+**Updated role after local setup (2026-05-03)**:
+
+```text
+Primary role:
+  HFT learning project.
+
+Why:
+  The strongest value is not raw optimization readiness. It is the L3 replay
+  model, order-id lifecycle, deterministic event stream, and paper execution
+  boundary. Those concepts are exactly the missing map needed before reading
+  more advanced Jane Street and 愚夫一得 material.
+
+Optimization role:
+  Secondary. Promote it to an optimization target only after a stable benchmark
+  or replay-invariant harness exists.
+```
 
 ---
 
@@ -357,8 +405,8 @@ benchmark path 不清楚
 
 | 候选 | 语言 | 测试框架 | Benchmark | Hot Path 清晰度 | 推荐优先级 |
 |---|---|---|---|---|---|
-| mansoor-mamnoon/limit-order-book | C++20 + Python | Catch2 | 内置 bench_tool + CSV | 高（BookCore） | **#1 优先验证** |
-| kpetridis24/lobsim | C++20 + Python | 未确认 | 需手写或确认 | 高（replay engine） | **#2 优先验证** |
+| mansoor-mamnoon/limit-order-book | C++20 + Python | Catch2 | 内置 bench_tool + CSV | 高（BookCore） | **#1 Optimize target** |
+| kpetridis24/lobsim | C++20 + Python | 已本地通过 core tests | 真实数据/benchmark 待补 | 高（L3 replay / paper execution） | **#1 Learning project** |
 | brprojects/Limit-Order-Book | C++ | GoogleTest | 需手写 harness | 中（Book / Limit / Order） | 备选 |
 | PIYUSH-KUMAR1809/order-matching-engine | 未确认 | 未确认 | 未确认 | 未知 | 移除 |
 | PandoraTrader | C++ | 未确认 | 不适合 | 低（平台胶水） | 架构学习 |
@@ -388,24 +436,26 @@ human review boundary
 Blog 1: Full Overclock Mode as an Agentic Quality Gate
 ```
 
-### Phase B：优先本地验证两个候选
+### Phase B：分工验证两个候选
 
 ```
-1. mansoor-mamnoon/limit-order-book
-2. kpetridis24/lobsim
+1. kpetridis24/lobsim
+   Role: HFT learning map
+   Verify: build, tests, event flow, L3 lifecycle, replay invariants
+
+2. mansoor-mamnoon/limit-order-book
+   Role: first Agent Optimize experiment
+   Verify: build, tests, bench_tool, hot path, allowed_files
 ```
 
-如果其中一个满足：
+The decision is not "which project is globally better." The decision is:
 
 ```
-能稳定本地构建
-能运行测试
-能跑 baseline benchmark（或容易手写 harness）
-hot path 文件清楚
-能定义 semantic invariants
+lobsim teaches the trading-system concepts.
+limit-order-book tests the optimization workflow.
 ```
 
-就选它作为 Blog 2 主项目。
+If `lobsim` later gets a stable benchmark / replay-invariant harness, it can become a second optimization case. It does not need to block the first Agent Optimize blog.
 
 ### Phase C：Blog 2 再写
 
