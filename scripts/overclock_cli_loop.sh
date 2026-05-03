@@ -8,9 +8,13 @@
 #   Critic   = Codex CLI (structured verdict output)
 #   Human    = reads final decision package
 #
+# Isolation:
+#   Runs in a git worktree to avoid contaminating the main repo.
+#   On APPROVE, patch is copied to main worktree for human review.
+#   On REJECT, worktree is simply deleted.
+#
 # Requirements:
 #   - Must run in a git repository
-#   - Working directory must be completely clean (tracked + untracked)
 #   - Claude Code and Codex CLI must be authenticated
 #
 # Usage:
@@ -25,27 +29,7 @@ RUNS_DIR="$PROJECT_ROOT/overclock_runs"
 
 # ── Helper Functions ──────────────────────────────────────────────────────────
 
-cleanup_changes() {
-    # Reset tracked files
-    git -C "$PROJECT_ROOT" checkout -- . 2>/dev/null || true
-
-    # Remove untracked files created during this run
-    if [[ -f "$RUN_DIR/created_files.txt" ]] && [[ -s "$RUN_DIR/created_files.txt" ]]; then
-        while IFS= read -r file; do
-            rm -f "$PROJECT_ROOT/$file" 2>/dev/null || true
-        done < "$RUN_DIR/created_files.txt"
-    fi
-
-    # Remove empty directories created during this run
-    if [[ -f "$RUN_DIR/created_dirs.txt" ]] && [[ -s "$RUN_DIR/created_dirs.txt" ]]; then
-        while IFS= read -r dir; do
-            rmdir "$PROJECT_ROOT/$dir" 2>/dev/null || true
-        done < "$RUN_DIR/created_dirs.txt"
-    fi
-}
-
 extract_allowed_files() {
-    # Extract allowed_files from YAML frontmatter
     local in_allowed=0
     local files=()
 
@@ -77,7 +61,6 @@ verify_allowed_files() {
         local allowed=0
         while IFS= read -r pattern; do
             [[ -z "$pattern" ]] && continue
-            # Support glob patterns
             if [[ "$changed" == $pattern ]]; then
                 allowed=1
                 break
@@ -97,6 +80,17 @@ verify_allowed_files() {
     return 0
 }
 
+cleanup_worktree() {
+    local worktree_path="$1"
+    local branch_name="$2"
+
+    if [[ -d "$worktree_path" ]]; then
+        echo "Cleaning up worktree: $worktree_path"
+        git -C "$PROJECT_ROOT" worktree remove --force "$worktree_path" 2>/dev/null || true
+        git -C "$PROJECT_ROOT" branch -D "$branch_name" 2>/dev/null || true
+    fi
+}
+
 # ── Pre-flight Checks ────────────────────────────────────────────────────────
 
 echo "=== Pre-flight Checks ==="
@@ -105,23 +99,9 @@ echo "=== Pre-flight Checks ==="
 if ! git -C "$PROJECT_ROOT" rev-parse --git-dir &>/dev/null; then
     echo "ERROR: Not a git repository"
     echo ""
-    echo "Overclock requires git for patch capture."
+    echo "Overclock requires git for worktree isolation."
     echo "Initialize with:"
     echo "  cd $PROJECT_ROOT && git init && git add . && git commit -m 'init'"
-    exit 1
-fi
-
-# Check working directory is completely clean (including untracked)
-if [[ -n "$(git -C "$PROJECT_ROOT" status --porcelain)" ]]; then
-    echo "ERROR: Working directory is not clean"
-    echo ""
-    echo "Overclock requires a completely clean working directory."
-    echo "Current status:"
-    git -C "$PROJECT_ROOT" status --short
-    echo ""
-    echo "Commit, stash, or remove untracked files:"
-    echo "  git add -A && git commit -m 'wip'"
-    echo "  git clean -fd  # WARNING: removes untracked files"
     exit 1
 fi
 
@@ -139,7 +119,6 @@ if ! command -v codex &>/dev/null; then
 fi
 
 echo "✓ Git repository: OK"
-echo "✓ Working directory: clean (tracked + untracked)"
 echo "✓ Claude Code: $(claude --version | head -1)"
 echo "✓ Codex CLI: $(codex --version)"
 echo ""
@@ -196,19 +175,13 @@ fi
 
 # ── Parse Brief ───────────────────────────────────────────────────────────────
 
-# Extract eval_script (must be a script path under scripts/)
 EVAL_SCRIPT=$(grep -E "^eval_script:" "$BRIEF_FILE" | head -1 | sed 's/^eval_script: *//' || true)
 
-# Security: only allow scripts under PROJECT_ROOT/scripts/
 if [[ -z "$EVAL_SCRIPT" ]]; then
     echo "ERROR: brief must specify eval_script"
-    echo "Example: eval_script: scripts/evaluate_safe_divide.sh"
+    echo "Example: eval_script: scripts/evaluators/evaluate_xxx.sh"
     exit 1
 fi
-
-# Normalize path and verify it's under scripts/
-EVAL_SCRIPT_PATH="$PROJECT_ROOT/${EVAL_SCRIPT#scripts/}"
-EVAL_SCRIPT_PATH="${EVAL_SCRIPT_PATH/\/scripts\//scripts/}"
 
 if [[ "$EVAL_SCRIPT" != scripts/* ]]; then
     echo "ERROR: eval_script must be under scripts/ directory"
@@ -223,18 +196,17 @@ if [[ ! -f "$EVAL_SCRIPT_FULL" ]]; then
 fi
 
 if [[ ! -x "$EVAL_SCRIPT_FULL" ]]; then
-    echo "Making evaluator script executable..."
     chmod +x "$EVAL_SCRIPT_FULL"
 fi
 
 echo "Evaluator: $EVAL_SCRIPT"
 
-# Extract allowed_files
 ALLOWED_FILES_TMP=$(mktemp)
 extract_allowed_files "$BRIEF_FILE" > "$ALLOWED_FILES_TMP"
 
 if [[ ! -s "$ALLOWED_FILES_TMP" ]]; then
     echo "ERROR: brief must specify allowed_files"
+    rm -f "$ALLOWED_FILES_TMP"
     exit 1
 fi
 
@@ -242,27 +214,51 @@ echo "Allowed files:"
 cat "$ALLOWED_FILES_TMP" | sed 's/^/  /'
 echo ""
 
-# ── Setup Run Directory ──────────────────────────────────────────────────────
+# ── Setup Run ─────────────────────────────────────────────────────────────────
 
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 RUN_DIR="$RUNS_DIR/$TIMESTAMP"
 mkdir -p "$RUN_DIR"
 
+# Create worktree branch
+WORKTREE_BRANCH="overclock/$TIMESTAMP"
+WORKTREE_PATH="$PROJECT_ROOT/.git/worktrees/overclock-$TIMESTAMP"
+
 echo "=== OVERCLOCK CLI LOOP ==="
 echo "Time: $TIMESTAMP"
 echo "Run dir: $RUN_DIR"
+echo "Worktree: $WORKTREE_PATH"
+echo "Branch: $WORKTREE_BRANCH"
 echo "Brief: $BRIEF_FILE"
 
 # Copy brief
 cp "$BRIEF_FILE" "$RUN_DIR/brief.md"
 cp "$ALLOWED_FILES_TMP" "$RUN_DIR/allowed_files.txt"
 
-# ── Record Pre-existing State ────────────────────────────────────────────────
+# ── Create Worktree ──────────────────────────────────────────────────────────
 
-# Record files that exist before Builder runs
-git -C "$PROJECT_ROOT" ls-files > "$RUN_DIR/preexisting_tracked.txt"
-find "$PROJECT_ROOT" -type f -not -path "$PROJECT_ROOT/.git/*" -not -path "$RUNS_DIR/*" | \
-    sed "s|^$PROJECT_ROOT/||" | sort > "$RUN_DIR/preexisting_all.txt" 2>/dev/null || true
+echo ""
+echo ">>> Creating isolated worktree..."
+
+# Create a new branch for this run
+git -C "$PROJECT_ROOT" branch "$WORKTREE_BRANCH" 2>/dev/null || {
+    echo "ERROR: Failed to create branch $WORKTREE_BRANCH"
+    rm -f "$ALLOWED_FILES_TMP"
+    exit 1
+}
+
+# Create worktree
+git -C "$PROJECT_ROOT" worktree add "$WORKTREE_PATH" "$WORKTREE_BRANCH" 2>/dev/null || {
+    echo "ERROR: Failed to create worktree"
+    git -C "$PROJECT_ROOT" branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
+    rm -f "$ALLOWED_FILES_TMP"
+    exit 1
+}
+
+echo "✓ Worktree created"
+
+# Cleanup trap
+trap 'cleanup_worktree "$WORKTREE_PATH" "$WORKTREE_BRANCH"' EXIT
 
 # ── Phase 1: Builder (Claude Code) ───────────────────────────────────────────
 
@@ -291,9 +287,9 @@ PROMPT
 
 echo "$BUILDER_PROMPT" > "$RUN_DIR/builder_prompt.md"
 
-# Run Claude Code — NO Bash permission, only file operations
-echo "Running Claude Code..."
-cd "$PROJECT_ROOT"
+# Run Claude Code IN THE WORKTREE
+echo "Running Claude Code in worktree..."
+cd "$WORKTREE_PATH"
 
 set +e
 claude --print --allowedTools "Read,Edit,Write" -p "$BUILDER_PROMPT" 2>&1 | tee "$RUN_DIR/builder.log"
@@ -306,29 +302,21 @@ if [[ $CLAUDE_EXIT -ne 0 ]]; then
 fi
 
 # Capture patch and changes
-git -C "$PROJECT_ROOT" diff > "$RUN_DIR/patch.diff"
-git -C "$PROJECT_ROOT" diff --name-only > "$RUN_DIR/changed_tracked.txt"
+git -C "$WORKTREE_PATH" diff > "$RUN_DIR/patch.diff"
+git -C "$WORKTREE_PATH" diff --name-only > "$RUN_DIR/changed_files.txt"
 
-# Find newly created (untracked) files
-find "$PROJECT_ROOT" -type f -not -path "$PROJECT_ROOT/.git/*" -not -path "$RUNS_DIR/*" | \
-    sed "s|^$PROJECT_ROOT/||" | sort > "$RUN_DIR/postexisting_all.txt" 2>/dev/null || true
-
-comm -13 "$RUN_DIR/preexisting_all.txt" "$RUN_DIR/postexisting_all.txt" > "$RUN_DIR/created_files.txt" || true
-
-# Find newly created directories
-find "$PROJECT_ROOT" -type d -empty -not -path "$PROJECT_ROOT/.git/*" -not -path "$RUNS_DIR/*" 2>/dev/null | \
-    sed "s|^$PROJECT_ROOT/||" | sort > "$RUN_DIR/created_dirs.txt" || true
-
-# Combined changed files (tracked changes + new files)
-cat "$RUN_DIR/changed_tracked.txt" "$RUN_DIR/created_files.txt" 2>/dev/null | sort -u > "$RUN_DIR/changed_files.txt"
+# Also capture new (untracked) files
+git -C "$WORKTREE_PATH" ls-files --others --exclude-standard > "$RUN_DIR/new_files.txt" || true
 
 echo ""
 echo "Patch saved: $RUN_DIR/patch.diff"
 echo "Changed files:"
 cat "$RUN_DIR/changed_files.txt" | sed 's/^/  /' || echo "  (none)"
+echo "New files:"
+cat "$RUN_DIR/new_files.txt" | sed 's/^/  /' || echo "  (none)"
 
 # Check if patch is empty
-if [[ ! -s "$RUN_DIR/patch.diff" ]] && [[ ! -s "$RUN_DIR/created_files.txt" ]]; then
+if [[ ! -s "$RUN_DIR/patch.diff" ]] && [[ ! -s "$RUN_DIR/new_files.txt" ]]; then
     echo ""
     echo "WARNING: Empty patch - no changes detected"
 fi
@@ -338,7 +326,10 @@ fi
 echo ""
 echo ">>> Scope Verification"
 
-if ! verify_allowed_files "$RUN_DIR/changed_files.txt" "$RUN_DIR/allowed_files.txt"; then
+# Combine changed and new files for scope check
+cat "$RUN_DIR/changed_files.txt" "$RUN_DIR/new_files.txt" 2>/dev/null | sort -u > "$RUN_DIR/all_changed_files.txt" || true
+
+if ! verify_allowed_files "$RUN_DIR/all_changed_files.txt" "$RUN_DIR/allowed_files.txt"; then
     cat > "$RUN_DIR/decision.md" << DECISION
 # Decision
 
@@ -348,17 +339,16 @@ if ! verify_allowed_files "$RUN_DIR/changed_files.txt" "$RUN_DIR/allowed_files.t
 Patch modifies files outside allowed scope.
 
 ## Changed Files (violations)
-$(cat "$RUN_DIR/changed_files.txt")
+$(cat "$RUN_DIR/all_changed_files.txt")
 
 ## Allowed Files
 $(cat "$RUN_DIR/allowed_files.txt")
 DECISION
 
-    cleanup_changes
-
     echo ""
     echo "=== REJECTED (Scope Violation) ==="
     cat "$RUN_DIR/decision.md"
+    # Worktree will be cleaned by trap
     exit 1
 fi
 
@@ -369,10 +359,15 @@ echo "✓ All changes within allowed scope"
 echo ""
 echo ">>> Phase 2: Executor"
 
-echo "Running: $EVAL_SCRIPT_FULL"
+echo "Running: $EVAL_SCRIPT"
 set +e
-cd "$PROJECT_ROOT"
-"$EVAL_SCRIPT_FULL" > "$RUN_DIR/eval.log" 2>&1
+cd "$WORKTREE_PATH"
+
+# Set environment variable so evaluator knows worktree path
+export OVERCLOCK_WORKTREE="$WORKTREE_PATH"
+export OVERCLOCK_PROJECT_ROOT="$PROJECT_ROOT"
+
+"$PROJECT_ROOT/$EVAL_SCRIPT" > "$RUN_DIR/eval.log" 2>&1
 EVAL_EXIT=$?
 set -e
 
@@ -384,7 +379,6 @@ echo ""
 echo ">>> Phase 3: Critic (Codex)"
 
 if [[ $EVAL_EXIT -ne 0 ]]; then
-    # Executor failed - auto reject
     cat > "$RUN_DIR/decision.md" << DECISION
 # Decision
 
@@ -407,12 +401,8 @@ See $RUN_DIR/patch.diff
 3. Re-run the loop
 DECISION
 
-    cleanup_changes
-
     echo ""
     echo "=== REJECTED (Executor Failed) ==="
-    echo "Decision: $RUN_DIR/decision.md"
-    echo ""
     cat "$RUN_DIR/decision.md"
     exit $EVAL_EXIT
 fi
@@ -467,7 +457,7 @@ echo "$CRITIC_PROMPT" > "$RUN_DIR/critic_prompt.md"
 
 echo "Running Codex..."
 set +e
-cd "$PROJECT_ROOT"
+cd "$WORKTREE_PATH"
 codex exec --skip-git-repo-check "$CRITIC_PROMPT" 2>&1 | tee "$RUN_DIR/critic.md"
 CODEX_EXIT=$?
 set -e
@@ -477,7 +467,6 @@ set -e
 echo ""
 echo ">>> Phase 4: Decision Package"
 
-# Extract verdict from last lines (structured format)
 VERDICT_LINE=$(grep -E "^VERDICT:" "$RUN_DIR/critic.md" | tail -1 || true)
 VERDICT_SUMMARY=$(grep -E "^SUMMARY:" "$RUN_DIR/critic.md" | tail -1 || true)
 
@@ -486,7 +475,6 @@ if [[ "$VERDICT_LINE" == "VERDICT: APPROVE" ]]; then
 elif [[ "$VERDICT_LINE" == "VERDICT: REJECT" ]]; then
     VERDICT="REJECT"
 else
-    # Fallback: look for APPROVE/REJECT anywhere
     if grep -qE "^APPROVE\b" "$RUN_DIR/critic.md" 2>/dev/null; then
         VERDICT="APPROVE"
     else
@@ -507,7 +495,7 @@ $(head -20 "$RUN_DIR/brief.md")
 ${VERDICT_SUMMARY#SUMMARY: }
 
 ## Changed Files
-$(cat "$RUN_DIR/changed_files.txt" 2>/dev/null || echo "No changes")
+$(cat "$RUN_DIR/all_changed_files.txt" 2>/dev/null || echo "No changes")
 
 ## Scope Check
 $(cat "$RUN_DIR/allowed_files.txt" | sed 's/^/Allowed: /')
@@ -533,25 +521,52 @@ $(cat "$RUN_DIR/critic.md")
 - allowed_files.txt
 DECISION
 
-if [[ "$VERDICT" == "REJECT" ]]; then
-    cleanup_changes
-fi
-
 echo ""
 echo "=== $VERDICT ==="
 echo ""
 echo "Decision package: $RUN_DIR/decision.md"
 echo ""
-cat "$RUN_DIR/decision.md"
 
-# Final status
 if [[ "$VERDICT" == "APPROVE" ]]; then
+    # Copy patch back to main repo for human review
+    echo "Copying approved changes to main worktree..."
+
+    # Apply the patch to main repo
+    if [[ -s "$RUN_DIR/patch.diff" ]]; then
+        git -C "$PROJECT_ROOT" apply "$RUN_DIR/patch.diff" || {
+            echo "WARNING: Could not apply patch to main worktree"
+            echo "Patch is saved at: $RUN_DIR/patch.diff"
+        }
+    fi
+
+    # Copy new files
+    if [[ -s "$RUN_DIR/new_files.txt" ]]; then
+        while IFS= read -r newfile; do
+            [[ -z "$newfile" ]] && continue
+            mkdir -p "$PROJECT_ROOT/$(dirname "$newfile")"
+            cp "$WORKTREE_PATH/$newfile" "$PROJECT_ROOT/$newfile"
+        done < "$RUN_DIR/new_files.txt"
+    fi
+
+    cat "$RUN_DIR/decision.md"
+
     echo ""
-    echo "Changes preserved. Review and commit if acceptable:"
+    echo "Approved changes applied to main worktree."
+    echo "Review and commit if acceptable:"
     echo "  git add -A && git commit -m 'feat: <message>'"
-else
     echo ""
-    echo "Changes reverted. See decision.md for details."
+    echo "Or discard:"
+    echo "  git checkout -- . && git clean -fd"
+
+    # Disable cleanup trap - we want to keep the worktree for now
+    # Actually, clean up the worktree since changes are in main now
+    trap - EXIT
+    cleanup_worktree "$WORKTREE_PATH" "$WORKTREE_BRANCH"
+else
+    cat "$RUN_DIR/decision.md"
+    echo ""
+    echo "Changes rejected. Worktree will be cleaned up."
+    # Trap will clean up automatically
 fi
 
 # Cleanup temp files
