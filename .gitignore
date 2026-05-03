@@ -1,0 +1,28 @@
+# Overclock runs (temporary logs)
+overclock_runs/*
+!overclock_runs/.gitkeep
+!overclock_runs/example-brief.md
+
+# OS files
+.DS_Store
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# Build
+build/
+cmake-build-*/
+*.o
+*.out
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# Node
+node_modules/
