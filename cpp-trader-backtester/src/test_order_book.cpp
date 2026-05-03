@@ -106,6 +106,61 @@ void test_fifo_ordering() {
     std::cout << "✅ FIFO price-time priority: PASSED\n\n";
 }
 
+void test_volume_invariant() {
+    std::cout << "Testing volume consistency invariant...\n";
+
+    OrderBook book("TEST");
+    Quantity total_executed = 0;
+
+    book.set_trade_callback([&](const Trade& t) {
+        total_executed += t.quantity;
+    });
+
+    // Add buy orders at price 100: [50, 30, 20] (total 100)
+    const Quantity original_total = 100;
+    const Price price = 1000000;
+    const Quantity expected_executed = 60;
+
+    Order buy1(1, price, 50, 1000, Side::BUY, OrderType::LIMIT, 1);
+    Order buy2(2, price, 30, 2000, Side::BUY, OrderType::LIMIT, 1);
+    Order buy3(3, price, 20, 3000, Side::BUY, OrderType::LIMIT, 1);
+
+    book.add_order(&buy1);
+    book.add_order(&buy2);
+    book.add_order(&buy3);
+
+    Quantity initial_bid_volume = book.bid_volume();
+    assert(initial_bid_volume == original_total);
+    std::cout << "  Initial bid volume: " << initial_bid_volume << "\n";
+
+    // Execute market sell for 60 shares
+    Order market_sell(4, 0, 60, 4000, Side::SELL, OrderType::MARKET, 2);
+    book.add_order(&market_sell);
+
+    // Verify executed quantity equals expected matched quantity
+    std::cout << "  Executed: " << total_executed << " (expected " << expected_executed << ")\n";
+    assert(total_executed == expected_executed);
+    std::cout << "  ✓ Executed quantity verified\n";
+
+    // Verify volume invariant: executed + remaining = original total
+    Quantity remaining = book.bid_volume();
+    std::cout << "  Remaining: " << remaining << "\n";
+    std::cout << "  Original total: " << original_total << "\n";
+
+    bool invariant_holds = (total_executed + remaining == original_total);
+
+    if (invariant_holds) {
+        std::cout << "  INVARIANT CHECK: " << total_executed << " + " << remaining
+                  << " = " << original_total << " PASSED\n";
+    } else {
+        std::cout << "  INVARIANT CHECK FAILED: " << total_executed << " + " << remaining
+                  << " != " << original_total << "\n";
+    }
+
+    assert(invariant_holds);
+    std::cout << "✅ Volume consistency invariant: PASSED\n\n";
+}
+
 int main() {
     std::cout << "=== Order Book Correctness Tests ===\n\n";
     
@@ -113,7 +168,8 @@ int main() {
         test_partial_fill_volume();
         test_multiple_price_levels();
         test_fifo_ordering();
-        
+        test_volume_invariant();
+
         std::cout << "=== ALL TESTS PASSED ===\n";
         return 0;
     } catch (const std::exception& e) {
