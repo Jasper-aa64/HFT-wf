@@ -311,9 +311,35 @@ claude --print --allowedTools "Read,Edit,Write" -p "$BUILDER_PROMPT" 2>&1 | tee 
 CLAUDE_EXIT=$?
 set -e
 
+# Builder failure is a gate failure - reject immediately
 if [[ $CLAUDE_EXIT -ne 0 ]]; then
+    cat > "$RUN_DIR/decision.md" << DECISION
+# Decision
+
+## Verdict: REJECT
+
+## Reason
+Builder (Claude Code) failed with exit code $CLAUDE_EXIT.
+
+This indicates the builder could not complete the edit task.
+Possible causes:
+- Permission denied
+- Invalid tool use
+- Timeout or interruption
+- API error
+
+## Builder Log
+See: $RUN_DIR/builder.log
+DECISION
+
     echo ""
-    echo "Builder exited with code $CLAUDE_EXIT"
+    echo "=== REJECTED (Builder Failed) ==="
+    echo "Exit code: $CLAUDE_EXIT"
+    cat "$RUN_DIR/decision.md"
+    echo ""
+    echo "Worktree preserved at: $WORKTREE_PATH"
+    echo "To clean up: git worktree remove $WORKTREE_PATH && git branch -D $WORKTREE_BRANCH"
+    exit $CLAUDE_EXIT
 fi
 
 # Capture changed tracked files
@@ -487,10 +513,10 @@ PROMPT
 
 echo "$CRITIC_PROMPT" > "$RUN_DIR/critic_prompt.md"
 
-echo "Running Codex..."
+echo "Running Codex (read-only sandbox)..."
 set +e
 cd "$WORKTREE_PATH"
-codex exec --skip-git-repo-check "$CRITIC_PROMPT" 2>&1 | tee "$RUN_DIR/critic.md"
+codex exec --sandbox read-only --skip-git-repo-check "$CRITIC_PROMPT" 2>&1 | tee "$RUN_DIR/critic.md"
 CODEX_EXIT=$?
 set -e
 
@@ -507,17 +533,15 @@ else
     VERDICT_LINE=$(grep -E "^VERDICT:" "$RUN_DIR/critic.md" | tail -1 || true)
     VERDICT_SUMMARY=$(grep -E "^SUMMARY:" "$RUN_DIR/critic.md" | tail -1 || true)
 
+    # Require EXACT "VERDICT: APPROVE" - no fallback to guessing
     if [[ "$VERDICT_LINE" == "VERDICT: APPROVE" ]]; then
         VERDICT="APPROVE"
     elif [[ "$VERDICT_LINE" == "VERDICT: REJECT" ]]; then
         VERDICT="REJECT"
     else
-        if grep -qE "^APPROVE\b" "$RUN_DIR/critic.md" 2>/dev/null; then
-            VERDICT="APPROVE"
-        else
-            VERDICT="REJECT"
-        fi
-        VERDICT_SUMMARY="VERDICT: $VERDICT (fallback parsing)"
+        # No valid verdict line found - default reject
+        VERDICT="REJECT"
+        VERDICT_SUMMARY="Malformed critic output: no VERDICT line found"
     fi
 fi
 
