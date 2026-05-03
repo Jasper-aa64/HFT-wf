@@ -3,7 +3,7 @@
 #include "types.hpp"
 #include "memory_pool.hpp"
 #include <map>
-#include <list>
+#include <deque>
 #include <functional>
 #include <vector>
 
@@ -33,7 +33,7 @@ public:
     
 private:
     struct PriceLevel {
-        std::list<Order*> orders;
+        std::deque<Order*> orders;
         Quantity total_quantity = 0;
     };
     
