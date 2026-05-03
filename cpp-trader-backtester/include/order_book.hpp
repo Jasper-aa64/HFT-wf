@@ -33,7 +33,6 @@ public:
     
 private:
     struct PriceLevel {
-        Price price;
         std::list<Order*> orders;
         Quantity total_quantity = 0;
     };

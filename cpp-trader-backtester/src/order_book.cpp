@@ -17,12 +17,10 @@ void OrderBook::add_order(Order* order) {
     if (order->status != OrderStatus::FILLED) {
         if (order->side == Side::BUY) {
             auto& level = bids_[order->price];
-            level.price = order->price;
             level.orders.push_back(order);
             level.total_quantity += (order->quantity - order->filled);
         } else {
             auto& level = asks_[order->price];
-            level.price = order->price;
             level.orders.push_back(order);
             level.total_quantity += (order->quantity - order->filled);
         }
@@ -70,25 +68,26 @@ void OrderBook::match_order(Order* order) {
         while (order->filled < order->quantity && !asks_.empty()) {
             auto it = asks_.begin();
             auto& level = it->second;
-        
+            Price level_price = it->first;
+
             // Check price compatibility
             if (order->type == OrderType::LIMIT) {
-                if (order->price < level.price) break;
+                if (order->price < level_price) break;
             }
-            
+
             while (!level.orders.empty() && order->filled < order->quantity) {
                 Order* contra_order = level.orders.front();
                 Quantity trade_qty = std::min(
                     order->quantity - order->filled,
                     contra_order->quantity - contra_order->filled
                 );
-                
-                execute_trade(order, contra_order, level.price, trade_qty);
-                
+
+                execute_trade(order, contra_order, level_price, trade_qty);
+
                 order->filled += trade_qty;
                 contra_order->filled += trade_qty;
                 level.total_quantity -= trade_qty;
-                
+
                 if (contra_order->filled >= contra_order->quantity) {
                     contra_order->status = OrderStatus::FILLED;
                     level.orders.pop_front();
@@ -96,7 +95,7 @@ void OrderBook::match_order(Order* order) {
                     contra_order->status = OrderStatus::PARTIAL;
                 }
             }
-            
+
             if (level.orders.empty()) {
                 asks_.erase(it);
             }
@@ -106,25 +105,26 @@ void OrderBook::match_order(Order* order) {
         while (order->filled < order->quantity && !bids_.empty()) {
             auto it = bids_.begin();
             auto& level = it->second;
-            
+            Price level_price = it->first;
+
             // Check price compatibility
             if (order->type == OrderType::LIMIT) {
-                if (order->price > level.price) break;
+                if (order->price > level_price) break;
             }
-            
+
             while (!level.orders.empty() && order->filled < order->quantity) {
                 Order* contra_order = level.orders.front();
                 Quantity trade_qty = std::min(
                     order->quantity - order->filled,
                     contra_order->quantity - contra_order->filled
                 );
-                
-                execute_trade(contra_order, order, level.price, trade_qty);
-                
+
+                execute_trade(contra_order, order, level_price, trade_qty);
+
                 order->filled += trade_qty;
                 contra_order->filled += trade_qty;
                 level.total_quantity -= trade_qty;
-                
+
                 if (contra_order->filled >= contra_order->quantity) {
                     contra_order->status = OrderStatus::FILLED;
                     level.orders.pop_front();
@@ -132,15 +132,15 @@ void OrderBook::match_order(Order* order) {
                     contra_order->status = OrderStatus::PARTIAL;
                 }
             }
-            
+
             if (level.orders.empty()) {
                 bids_.erase(it);
             }
         }
     }
-    
-    order->status = (order->filled >= order->quantity) ? 
-                    OrderStatus::FILLED : 
+
+    order->status = (order->filled >= order->quantity) ?
+                    OrderStatus::FILLED :
                     (order->filled > 0 ? OrderStatus::PARTIAL : OrderStatus::PENDING);
 }
 
