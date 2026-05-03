@@ -106,6 +106,49 @@ void test_fifo_ordering() {
     std::cout << "✅ FIFO price-time priority: PASSED\n\n";
 }
 
+void test_best_bid_regression() {
+    std::cout << "Testing best_bid() returns highest bid...\n";
+
+    OrderBook book("TEST");
+
+    // Scenario 1: Higher bid added first, lower bid added second
+    // best_bid() should return the higher price
+    Order buy_high(1, 1020000, 100, 1000, Side::BUY, OrderType::LIMIT, 1);  // $102.00
+    book.add_order(&buy_high);
+
+    assert(book.best_bid() == 1020000);
+    std::cout << "  ✓ After adding high bid: best_bid() = 1020000\n";
+
+    Order buy_low(2, 1000000, 100, 2000, Side::BUY, OrderType::LIMIT, 1);   // $100.00
+    book.add_order(&buy_low);
+
+    // CRITICAL: best_bid() must return HIGHEST (102), not lowest (100)
+    // Historical bug: using rbegin() instead of begin() would return 100
+    assert(book.best_bid() == 1020000);
+    std::cout << "  ✓ After adding low bid: best_bid() = 1020000 (highest, not lowest)\n";
+
+    std::cout << "✅ Scenario 1 (high first, low second): PASSED\n";
+
+    // Scenario 2: Fresh book - lower bid added first, higher bid added second
+    OrderBook book2("TEST2");
+
+    Order buy_low2(3, 990000, 50, 3000, Side::BUY, OrderType::LIMIT, 1);    // $99.00
+    book2.add_order(&buy_low2);
+
+    assert(book2.best_bid() == 990000);
+    std::cout << "  ✓ After adding low bid: best_bid() = 990000\n";
+
+    Order buy_high2(4, 1010000, 50, 4000, Side::BUY, OrderType::LIMIT, 1);  // $101.00
+    book2.add_order(&buy_high2);
+
+    // best_bid() should now return the higher price
+    assert(book2.best_bid() == 1010000);
+    std::cout << "  ✓ After adding high bid: best_bid() = 1010000 (highest, not lowest)\n";
+
+    std::cout << "✅ Scenario 2 (low first, high second): PASSED\n";
+    std::cout << "✅ best_bid() regression test: PASSED\n\n";
+}
+
 void test_volume_invariant() {
     std::cout << "Testing volume consistency invariant...\n";
 
@@ -163,11 +206,12 @@ void test_volume_invariant() {
 
 int main() {
     std::cout << "=== Order Book Correctness Tests ===\n\n";
-    
+
     try {
         test_partial_fill_volume();
         test_multiple_price_levels();
         test_fifo_ordering();
+        test_best_bid_regression();
         test_volume_invariant();
 
         std::cout << "=== ALL TESTS PASSED ===\n";
