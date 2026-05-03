@@ -2,13 +2,13 @@
 #
 # Deterministic evaluator for testing retry logic.
 # Fails on attempt 1, passes on attempt 2+.
-# Uses a marker file to track attempts.
+# Uses OVERCLOCK_ATTEMPT from the loop (no marker file needed).
 #
 
 set -euo pipefail
 
 WORK_DIR="${OVERCLOCK_WORKTREE:-$(pwd)}"
-MARKER_FILE="$WORK_DIR/.retry_test_attempt"
+ATTEMPT_NUM="${OVERCLOCK_ATTEMPT:-1}"
 
 echo "=== Evaluator: retry_deterministic ==="
 echo "Working directory: $WORK_DIR"
@@ -20,18 +20,10 @@ if [[ ! -f "$WORK_DIR/python-utils/retry_test.py" ]]; then
 fi
 echo "✓ Found: python-utils/retry_test.py"
 
-# Track attempt number
-ATTEMPT_NUM=1
-if [[ -f "$MARKER_FILE" ]]; then
-    ATTEMPT_NUM=$(cat "$MARKER_FILE")
-    ((ATTEMPT_NUM++))
-fi
-echo "$ATTEMPT_NUM" > "$MARKER_FILE"
-
 echo ""
 echo "Attempt number: $ATTEMPT_NUM"
 
-if [[ $ATTEMPT_NUM -eq 1 ]]; then
+if [[ "$ATTEMPT_NUM" == "1" ]]; then
     echo ""
     echo "FAIL: First attempt intentionally fails to trigger retry"
     echo "This is a deterministic test for retry logic."

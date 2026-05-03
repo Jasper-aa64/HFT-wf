@@ -610,6 +610,9 @@ PROMPT
     # Set environment variable so evaluator knows worktree path
     export OVERCLOCK_WORKTREE="$WORKTREE_PATH"
     export OVERCLOCK_PROJECT_ROOT="$PROJECT_ROOT"
+    export OVERCLOCK_RUN_DIR="$RUN_DIR"
+    export OVERCLOCK_ATTEMPT="$ATTEMPT"
+    export OVERCLOCK_ATTEMPT_DIR="$ATTEMPT_DIR"
 
     "$PROJECT_ROOT/$EVAL_SCRIPT" > "$ATTEMPT_DIR/eval.log" 2>&1
     EVAL_EXIT=$?
