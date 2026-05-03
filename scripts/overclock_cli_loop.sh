@@ -497,7 +497,9 @@ CRITIC_PREP_FOOTER
 echo "Running Codex to generate checklist..."
 set +e
 cd "$WORKTREE_PATH"
-codex exec --sandbox read-only --skip-git-repo-check "$(cat "$RUN_DIR/critic_prep_prompt.md")" 2>&1 | tee "$RUN_DIR/critic_checklist.md"
+
+# Save full output to log, then extract checklist
+codex exec --sandbox read-only --skip-git-repo-check "$(cat "$RUN_DIR/critic_prep_prompt.md")" 2>&1 | tee "$RUN_DIR/critic_prep.log"
 CRITIC_PREP_EXIT=$?
 set -e
 
@@ -518,7 +520,7 @@ No attempts were consumed.
 
 ## Critic-Prep Log
 
-See: $RUN_DIR/critic_checklist.md
+See: $RUN_DIR/critic_prep.log
 
 ## Cleanup Commands
 
@@ -540,8 +542,22 @@ DECISION
     exit 1
 fi
 
-# Handle empty checklist
-if [[ ! -s "$RUN_DIR/critic_checklist.md" ]]; then
+# Extract just the checklist content from Codex's response
+# Codex output starts after "codex" line, ends before "tokens used"
+# Use awk to find the LAST "## Checklist" section from Codex's actual response
+awk '
+/^codex$/ { in_codex=1; next }
+in_codex && /^## Checklist/ { capturing=1; checklist="" }
+capturing { checklist = checklist $0 "\n" }
+capturing && /^tokens used/ { exit }
+END { printf "%s", checklist }
+' "$RUN_DIR/critic_prep.log" 2>/dev/null | sed '/^tokens used/d' > "$RUN_DIR/critic_checklist.md" || true
+
+# Handle missing or empty checklist
+CHECKLIST_ITEMS=$(grep -c "^- \[ \]" "$RUN_DIR/critic_checklist.md" 2>/dev/null || echo "0")
+# Trim whitespace from count
+CHECKLIST_ITEMS=$(echo "$CHECKLIST_ITEMS" | tr -d '[:space:]')
+if [[ "$CHECKLIST_ITEMS" -lt 1 ]]; then
     cat > "$RUN_DIR/final_decision.md" << DECISION
 # Final Decision
 
@@ -568,13 +584,14 @@ DECISION
     echo "=== SETUP_FAILED (Empty Checklist) ==="
     cat "$RUN_DIR/final_decision.md"
     echo ""
+    echo "Checklist items found: $CHECKLIST_ITEMS"
     echo "Worktree preserved at: $WORKTREE_PATH"
     echo "To clean up: git worktree remove $WORKTREE_PATH && git branch -D $WORKTREE_BRANCH"
     rm -f "$ALLOWED_FILES_TMP"
     exit 1
 fi
 
-echo "✓ Checklist generated: $RUN_DIR/critic_checklist.md"
+echo "✓ Checklist generated: $RUN_DIR/critic_checklist.md ($CHECKLIST_ITEMS items)"
 
 # ── Retry Loop ────────────────────────────────────────────────────────────────
 
