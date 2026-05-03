@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmake --build build -j)",
+      "WebSearch",
+      "Read(//Users/mac/Documents/Obsidian Vault/JMaaa32.github.io/**)",
+      "Bash(hugo server *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:1313)",
+      "Bash(python3 ./.trellis/scripts/task.py create \"Varka theme: hero text + stats card teal refinement\")",
+      "Bash(chmod +x \"/Users/mac/Documents/Obsidian Vault/JMaaa32.github.io/scripts/watch-deploy.sh\")",
+      "Bash(command -v fswatch)",
+      "Bash(brew install *)",
+      "Bash(cp /Users/mac/.claude/image-cache/a94a7567-4064-46e1-a7d1-315200e6e3e8/4.png '/Users/mac/Documents/Obsidian Vault/JMaaa32.github.io/static/images/site/avatar-light.png')",
+      "Bash(sips -s format webp '/Users/mac/Documents/Obsidian Vault/JMaaa32.github.io/static/images/site/avatar-light.png' --out '/Users/mac/Documents/Obsidian Vault/JMaaa32.github.io/static/images/site/avatar-light.webp')",
+      "Bash(ffmpeg -i '/Users/mac/Documents/Obsidian Vault/JMaaa32.github.io/static/images/site/avatar-light.png' '/Users/mac/Documents/Obsidian Vault/JMaaa32.github.io/static/images/site/avatar-light.webp' -y -loglevel error)",
+      "Bash(cp '/Users/mac/Documents/Obsidian Vault/JMaaa32.github.io/static/images/site/avatar-light.png' '/Users/mac/Documents/Obsidian Vault/JMaaa32.github.io/static/images/site/avatar-light.webp')",
+      "Bash(python3 *)",
+      "Bash(command -v magick)",
+      "Bash(command -v convert)",
+      "Bash(pip3 install *)",
+      "Bash(hugo --minify --quiet)",
+      "Bash(chmod +x /Users/mac/Desktop/Quant/scripts/evaluate.sh)",
+      "Bash(claude --version)",
+      "Bash(codex --version)",
+      "Bash(chmod +x *)",
+      "Bash(npm view *)",
+      "Bash(npm update *)",
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ]
+  }
+}
