@@ -498,8 +498,14 @@ echo "Running Codex to generate checklist..."
 set +e
 cd "$WORKTREE_PATH"
 
-# Save full output to log, then extract checklist
-codex exec --sandbox read-only --skip-git-repo-check "$(cat "$RUN_DIR/critic_prep_prompt.md")" 2>&1 | tee "$RUN_DIR/critic_prep.log"
+# Use -o to save last message (the checklist) directly
+# stdout/stderr goes to log, clean checklist goes to file
+codex exec \
+    --sandbox read-only \
+    --skip-git-repo-check \
+    -o "$RUN_DIR/critic_checklist.md" \
+    "$(cat "$RUN_DIR/critic_prep_prompt.md")" \
+    > "$RUN_DIR/critic_prep.log" 2>&1
 CRITIC_PREP_EXIT=$?
 set -e
 
@@ -541,17 +547,6 @@ DECISION
     rm -f "$ALLOWED_FILES_TMP"
     exit 1
 fi
-
-# Extract just the checklist content from Codex's response
-# Codex output starts after "codex" line, ends before "tokens used"
-# Use awk to find the LAST "## Checklist" section from Codex's actual response
-awk '
-/^codex$/ { in_codex=1; next }
-in_codex && /^## Checklist/ { capturing=1; checklist="" }
-capturing { checklist = checklist $0 "\n" }
-capturing && /^tokens used/ { exit }
-END { printf "%s", checklist }
-' "$RUN_DIR/critic_prep.log" 2>/dev/null | sed '/^tokens used/d' > "$RUN_DIR/critic_checklist.md" || true
 
 # Handle missing or empty checklist
 CHECKLIST_ITEMS=$(grep -c "^- \[ \]" "$RUN_DIR/critic_checklist.md" 2>/dev/null || echo "0")
