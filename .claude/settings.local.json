@@ -28,7 +28,16 @@
       "Bash(git init *)",
       "Bash(git add *)",
       "Bash(git commit *)",
-      "Bash(git *)"
+      "Bash(git *)",
+      "Bash(./scripts/overclock_cli_loop.sh *)",
+      "Bash(bash -n /Users/mac/Desktop/Quant/scripts/overclock_cli_loop.sh)",
+      "Bash(grep *)",
+      "Bash(awk 'NR>=630 && NR<=640' /Users/mac/Desktop/Quant/scripts/overclock_cli_loop.sh)",
+      "Bash(awk NR>=620 && NR<=640 *)",
+      "Bash(bash -n)",
+      "Bash(shellcheck /Users/mac/Desktop/Quant/scripts/overclock_cli_loop.sh)",
+      "Bash(bash *)",
+      "Bash(awk NR>=469 && NR<=512 *)"
     ]
   }
 }

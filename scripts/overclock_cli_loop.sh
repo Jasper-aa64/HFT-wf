@@ -466,24 +466,36 @@ DECISION
 fi
 
 # Executor passed - run Codex review
-CRITIC_PROMPT=$(cat <<PROMPT
+# Build critic prompt in a file to avoid variable expansion issues
+cat > "$RUN_DIR/critic_prompt.md" << 'CRITIC_HEADER'
 You are the Critic in an Overclock workflow.
 You did NOT write this patch.
 
 Default posture: REJECT unless the patch proves itself with evidence.
+CRITIC_HEADER
+
+cat >> "$RUN_DIR/critic_prompt.md" << CRITIC_BODY
 
 ## Task Brief
 $(cat "$RUN_DIR/brief.md")
 
 ## Patch Diff
-\`\`\`diff
-$(cat "$RUN_DIR/patch.diff")
-\`\`\`
+CRITIC_BODY
+
+echo '```diff' >> "$RUN_DIR/critic_prompt.md"
+cat "$RUN_DIR/patch.diff" >> "$RUN_DIR/critic_prompt.md"
+echo '```' >> "$RUN_DIR/critic_prompt.md"
+
+cat >> "$RUN_DIR/critic_prompt.md" << 'CRITIC_LOG'
 
 ## Executor Log
-\`\`\`
-$(cat "$RUN_DIR/eval.log")
-\`\`\`
+CRITIC_LOG
+
+echo '```' >> "$RUN_DIR/critic_prompt.md"
+cat "$RUN_DIR/eval.log" >> "$RUN_DIR/critic_prompt.md"
+echo '```' >> "$RUN_DIR/critic_prompt.md"
+
+cat >> "$RUN_DIR/critic_prompt.md" << 'CRITIC_FOOTER'
 
 ## Your Job
 
@@ -508,15 +520,12 @@ SUMMARY: <one line summary of what's missing>
 
 The verdict line MUST start with "VERDICT:" and be one of APPROVE or REJECT.
 This is parsed programmatically. Do not deviate from this format.
-PROMPT
-)
-
-echo "$CRITIC_PROMPT" > "$RUN_DIR/critic_prompt.md"
+CRITIC_FOOTER
 
 echo "Running Codex (read-only sandbox)..."
 set +e
 cd "$WORKTREE_PATH"
-codex exec --sandbox read-only --skip-git-repo-check "$CRITIC_PROMPT" 2>&1 | tee "$RUN_DIR/critic.md"
+codex exec --sandbox read-only --skip-git-repo-check "$(cat "$RUN_DIR/critic_prompt.md")" 2>&1 | tee "$RUN_DIR/critic.md"
 CODEX_EXIT=$?
 set -e
 
@@ -631,7 +640,7 @@ if [[ "$VERDICT" == "APPROVE" ]]; then
         echo ""
         echo "Approved changes applied to main worktree."
         echo "Review and commit if acceptable:"
-        echo "  git add -A && git commit -m 'feat: <message>'"
+        echo '  git add -A && git commit -m "feat: <message>"'
         echo ""
         echo "Or discard:"
         echo "  git checkout -- . && git clean -fd"
