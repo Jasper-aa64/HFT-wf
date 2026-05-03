@@ -7,6 +7,10 @@ overclock_runs/*
 # Overclock worktrees
 .overclock_worktrees/
 
+# External learning project clones
+03-HFT-Learning/*
+!03-HFT-Learning/README.md
+
 # OS files
 .DS_Store
 
