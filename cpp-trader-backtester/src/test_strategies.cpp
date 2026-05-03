@@ -22,9 +22,9 @@ void test_momentum_strategy_signals() {
         ticks.push_back(Tick{"TEST", base_price, 100, static_cast<Timestamp>(i * 1000), Side::BUY});
     }
     
-    // Next ticks show uptrend (should trigger buy)
+    // Next ticks show explosive uptrend (6%+ rise to exceed 2% threshold)
     for (int i = 5; i < 10; ++i) {
-        Price price = base_price + (i - 4) * 3000;  // +$0.30 per tick
+        Price price = base_price + (i - 4) * 15000;  // +$1.50 per tick (6%+ total)
         ticks.push_back(Tick{"TEST", price, 100, static_cast<Timestamp>(i * 1000), Side::BUY});
     }
     
