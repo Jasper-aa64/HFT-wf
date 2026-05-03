@@ -499,20 +499,26 @@ set -e
 echo ""
 echo ">>> Phase 4: Decision Package"
 
-VERDICT_LINE=$(grep -E "^VERDICT:" "$RUN_DIR/critic.md" | tail -1 || true)
-VERDICT_SUMMARY=$(grep -E "^SUMMARY:" "$RUN_DIR/critic.md" | tail -1 || true)
-
-if [[ "$VERDICT_LINE" == "VERDICT: APPROVE" ]]; then
-    VERDICT="APPROVE"
-elif [[ "$VERDICT_LINE" == "VERDICT: REJECT" ]]; then
+# If Codex CLI failed, force REJECT
+if [[ $CODEX_EXIT -ne 0 ]]; then
     VERDICT="REJECT"
+    VERDICT_SUMMARY="Codex CLI failed with exit code $CODEX_EXIT"
 else
-    if grep -qE "^APPROVE\b" "$RUN_DIR/critic.md" 2>/dev/null; then
+    VERDICT_LINE=$(grep -E "^VERDICT:" "$RUN_DIR/critic.md" | tail -1 || true)
+    VERDICT_SUMMARY=$(grep -E "^SUMMARY:" "$RUN_DIR/critic.md" | tail -1 || true)
+
+    if [[ "$VERDICT_LINE" == "VERDICT: APPROVE" ]]; then
         VERDICT="APPROVE"
-    else
+    elif [[ "$VERDICT_LINE" == "VERDICT: REJECT" ]]; then
         VERDICT="REJECT"
+    else
+        if grep -qE "^APPROVE\b" "$RUN_DIR/critic.md" 2>/dev/null; then
+            VERDICT="APPROVE"
+        else
+            VERDICT="REJECT"
+        fi
+        VERDICT_SUMMARY="VERDICT: $VERDICT (fallback parsing)"
     fi
-    VERDICT_SUMMARY="VERDICT: $VERDICT (fallback parsing)"
 fi
 
 cat > "$RUN_DIR/decision.md" << DECISION
@@ -567,25 +573,33 @@ echo ""
 
 if [[ "$VERDICT" == "APPROVE" ]]; then
     if [[ $AUTO_APPLY -eq 1 ]]; then
+        # Check if main worktree is clean before applying
+        if [[ -n "$(git -C "$PROJECT_ROOT" status --porcelain)" ]]; then
+            echo ""
+            echo "ERROR: Main worktree is not clean. Cannot auto-apply."
+            echo ""
+            echo "Current status:"
+            git -C "$PROJECT_ROOT" status --short
+            echo ""
+            echo "Commit or stash changes first, then manually apply:"
+            echo "  git apply $RUN_DIR/patch.diff"
+            echo ""
+            echo "Worktree with approved changes: $WORKTREE_PATH"
+            echo "To clean up: git worktree remove $WORKTREE_PATH && git branch -D $WORKTREE_BRANCH"
+            exit 1
+        fi
+
         echo "Auto-applying approved changes to main worktree..."
 
-        # Apply the patch to main repo
+        # Apply the patch to main repo (includes new files via git add -N)
         if [[ -s "$RUN_DIR/patch.diff" ]]; then
             git -C "$PROJECT_ROOT" apply "$RUN_DIR/patch.diff" || {
                 echo ""
                 echo "ERROR: Could not apply patch to main worktree"
                 echo "Patch is saved at: $RUN_DIR/patch.diff"
                 echo "Apply manually with: git apply $RUN_DIR/patch.diff"
+                exit 1
             }
-        fi
-
-        # Copy new files
-        if [[ -s "$RUN_DIR/new_files.txt" ]]; then
-            while IFS= read -r newfile; do
-                [[ -z "$newfile" ]] && continue
-                mkdir -p "$PROJECT_ROOT/$(dirname "$newfile")"
-                cp "$WORKTREE_PATH/$newfile" "$PROJECT_ROOT/$newfile"
-            done < "$RUN_DIR/new_files.txt"
         fi
 
         cat "$RUN_DIR/decision.md"
@@ -609,7 +623,6 @@ if [[ "$VERDICT" == "APPROVE" ]]; then
         echo "To apply to main worktree:"
         echo "  cd $PROJECT_ROOT"
         echo "  git apply $RUN_DIR/patch.diff"
-        echo "  # Or copy new files manually from $WORKTREE_PATH"
         echo ""
         echo "To clean up worktree after applying:"
         echo "  git worktree remove $WORKTREE_PATH"
