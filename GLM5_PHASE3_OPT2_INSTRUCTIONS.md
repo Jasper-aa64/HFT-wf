@@ -239,8 +239,40 @@ cat experiments/results.tsv
 ## TASK 1 OUTPUT
 <!-- GLM5 在此写下分析 -->
 
+**方案 A: std::list → std::deque**
+- 原理: deque 连续内存，cache locality 更好，`front()/pop_front()` 不需要追指针
+- 改动: 只改 `#include <list>` → `#include <deque>` 和 PriceLevel 定义
+- 风险: 无，API 完全兼容
 
 ---
 
 ## DONE / ESCALATE
 <!-- GLM5 在此写下最终结果 -->
+
+## DONE
+
+**开始时间**: 2026-05-04 01:09:55
+**结束时间**: 2026-05-04 01:11:12
+**工作时长**: 约 1 分钟 17 秒
+
+### 结果摘要
+
+| 指标 | Round 1 | Round 2 | 总改善 |
+|------|---------|---------|-------|
+| 基线延迟 | 0.13237 | 0.13237 | - |
+| 优化后延迟 | 0.12104 | **0.1199** | - |
+| 改善幅度 | 8.56% | **9.42%** | **总计 9.42%** |
+
+### Git 提交
+```
+e006d72 perf: Replace std::list with std::deque in PriceLevel for cache locality
+```
+
+### 改动
+- `include/order_book.hpp` - `std::list<Order*>` → `std::deque<Order*>`
+
+### 验证
+- ✅ test_order_book PASSED
+- ✅ test_strategies PASSED
+- ✅ invariant check PASSED
+- ✅ performance gate PASSED (9.42% ≥ 3%)

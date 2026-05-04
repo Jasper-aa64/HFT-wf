@@ -1,11 +1,11 @@
-# Overclock runs (temporary logs)
-overclock_runs/*
-!overclock_runs/.gitkeep
-!overclock_runs/example-brief.md
-!overclock_runs/test-*.md
+# GateKeeper runs (temporary logs)
+gatekeeper_runs/*
+!gatekeeper_runs/.gitkeep
+!gatekeeper_runs/example-brief.md
+!gatekeeper_runs/test-*.md
 
-# Overclock worktrees
-.overclock_worktrees/
+# GateKeeper worktrees
+.gatekeeper_worktrees/
 
 # External learning project clones
 03-HFT-Learning/*

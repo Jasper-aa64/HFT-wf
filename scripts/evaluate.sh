@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# evaluate.sh — Overclock Mode Executor Script
+# evaluate.sh — GateKeeper Mode Executor Script
 #
 # This is the deterministic machine judge.
 # Exit 0 = pass, non-zero = fail.
@@ -8,7 +8,7 @@
 # Usage:
 #   ./scripts/evaluate.sh
 #
-# Overclock mode calls this script; Critic reviews the output.
+# GateKeeper mode calls this script; Critic reviews the output.
 #
 
 set -euo pipefail
@@ -16,7 +16,7 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-echo "=== OVERCLOCK EXECUTOR ==="
+echo "=== GATEKEEPER EXECUTOR ==="
 echo "Project: $PROJECT_ROOT"
 echo "Time: $(date -Iseconds)"
 echo ""

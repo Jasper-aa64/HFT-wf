@@ -1,15 +1,15 @@
-# Overclock Mode Blog Outline
+# GateKeeper Mode Blog Outline
 
 ## Working Title
 
 ```text
-Overclock Mode: Building an Agentic Quality Gate Before Letting AI Change Code
+GateKeeper Mode: Building an Agentic Quality Gate Before Letting AI Change Code
 ```
 
 Alternative Chinese title:
 
 ```text
-Overclock Mode：让 AI 写代码之前，先给它建一套质量门禁
+GateKeeper Mode：让 AI 写代码之前，先给它建一套质量门禁
 ```
 
 ---
@@ -34,7 +34,7 @@ prove that agents can write code under structured quality gates
 ```
 
 Do not frame `cpp-trader-backtester` as a serious HFT system. Frame it as a
-controlled target for validating the Overclock workflow.
+controlled target for validating the GateKeeper workflow.
 
 ---
 
@@ -45,7 +45,7 @@ When AI can write code, the bottleneck shifts from "can it produce a patch?"
 to "can the system prove the patch is acceptable?"
 ```
 
-Overclock Mode is not a stronger prompt. It is a workflow:
+GateKeeper Mode is not a stronger prompt. It is a workflow:
 
 ```text
 Critic defines evidence before the patch.
@@ -124,7 +124,7 @@ No attempt is consumed
 
 ## What Makes This Different From Ordinary AI Review
 
-| Ordinary AI Review | Overclock Mode |
+| Ordinary AI Review | GateKeeper Mode |
 |---|---|
 | Critic appears after patch | Critic defines evidence before patch |
 | Review is impression-based | Review is checklist + evidence based |
@@ -147,23 +147,23 @@ Use these validated runs:
 
 ```text
 APPROVE:
-overclock_runs/20260503-173556/
+gatekeeper_runs/20260503-173556/
   critic_checklist.md
   final_decision.md
 
 DETERMINISTIC RETRY:
-overclock_runs/20260503-173731/
+gatekeeper_runs/20260503-173731/
   attempt-1/eval.log
   attempt-1/decision.md
   attempt-2/decision.md
   final_decision.md
 
 ESCALATE:
-overclock_runs/20260503-173917/
+gatekeeper_runs/20260503-173917/
   final_decision.md
 
 SEMANTIC REJECT:
-overclock_runs/20260503-153929/
+gatekeeper_runs/20260503-153929/
   patch.diff
   eval.log
   critic.md
@@ -207,7 +207,7 @@ default reject
 human reads decision package
 ```
 
-### 3. From Overclock Lite+ To Full Overclock Mode
+### 3. From GateKeeper Lite+ To Full GateKeeper Mode
 
 Evolution:
 
@@ -272,7 +272,7 @@ Task:
   add volume consistency invariant test
 
 Run:
-  overclock_runs/20260503-205323/
+  gatekeeper_runs/20260503-205323/
 
 Result:
   attempt 1 -> REJECT
@@ -287,7 +287,7 @@ Applied patch:
 Purpose:
 
 ```text
-The first real sandbox task proves Overclock can accept a good narrow patch.
+The first real sandbox task proves GateKeeper can accept a good narrow patch.
 The next experiment should test whether the workflow is useful for iterating on
 known project problems.
 ```
@@ -328,7 +328,7 @@ Stress-test result to include:
 
 ```text
 Run:
-  overclock_runs/20260503-214848/
+  gatekeeper_runs/20260503-214848/
 
 Task:
   fix strategy-layer accounting and fill ownership
@@ -351,7 +351,7 @@ Key lesson:
 An Executor gate is only as strong as the commands it runs.
 
 If tests depend on assert(), running them under -DNDEBUG turns the quality gate
-into a smoke test. For this project, the next Overclock iteration must run
+into a smoke test. For this project, the next GateKeeper iteration must run
 tests in Debug/ASan or replace critical assertions with explicit runtime
 checks that cannot be compiled out.
 ```
@@ -378,7 +378,7 @@ How to write this in the article:
 ```text
 The stress test did not produce an approved patch. That was the useful result.
 It forced the workflow to reveal that the evidence gate itself was too weak.
-Overclock is not only a patch filter; it is a way to debug the quality system
+GateKeeper is not only a patch filter; it is a way to debug the quality system
 around the agent.
 ```
 
@@ -439,7 +439,7 @@ not the primary optimization benchmark target.
 ## Key Sentences To Reuse
 
 ```text
-Overclock Mode is a quality-control system, not a prompt style.
+GateKeeper Mode is a quality-control system, not a prompt style.
 ```
 
 ```text
@@ -466,6 +466,6 @@ Agent-assisted optimization should begin only after the quality gate exists.
 
 - AutoGen Reflection pattern as a known multi-agent review reference.
 - AutoKernel / KernelAgent as later optimization-loop inspiration.
-- Internal project evidence from `overclock_runs/`.
+- Internal project evidence from `gatekeeper_runs/`.
 - Attacker research is background only; do not add Attacker as a blocking gate
   in this article.

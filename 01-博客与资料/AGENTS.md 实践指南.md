@@ -336,7 +336,7 @@ AGENTS.md is not a README replacement. It is the entry point for the AI workflow
 
 ---
 
-## Relationship To Quality Assurance / Overclock Mode
+## Relationship To Quality Assurance / GateKeeper Mode
 
 This article is not exactly about multi-agent adversarial review, but it provides the infrastructure underneath it.
 

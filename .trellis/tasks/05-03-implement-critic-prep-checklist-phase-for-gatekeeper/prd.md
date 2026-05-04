@@ -1,4 +1,4 @@
-# Critic-Prep Checklist Phase for Overclock
+# Critic-Prep Checklist Phase for GateKeeper
 
 ## Goal
 
@@ -6,7 +6,7 @@ Add a Critic-Prep phase that runs **before** Builder writes any code. The Critic
 
 ## What I already know
 
-From `02-Agent-Driven Workflow/05. Overclock CLI MVP Status.md`:
+From `02-Agent-Driven Workflow/05. GateKeeper CLI MVP Status.md`:
 
 - Current flow: Builder → Executor → Critic → Decision (with retry loop)
 - Critic currently writes a checklist during review
@@ -27,7 +27,7 @@ Target change:
 
 1. **Critic-Prep Phase** (before attempt loop starts)
    - Input: brief.md, allowed_files, current target file snapshots (if exist)
-   - Output: `overclock_runs/<timestamp>/critic_checklist.md`
+   - Output: `gatekeeper_runs/<timestamp>/critic_checklist.md`
    - Run: Codex CLI in read-only sandbox
    - Timing: Once per run, not per attempt
 
@@ -52,7 +52,7 @@ Target change:
 5. **Checklist Stability**
    - critic_checklist.md is generated once at run start
    - Not regenerated between attempts
-   - Stored at `overclock_runs/<timestamp>/critic_checklist.md`
+   - Stored at `gatekeeper_runs/<timestamp>/critic_checklist.md`
 
 ## Acceptance Criteria
 
@@ -67,7 +67,7 @@ Target change:
 
 ## Definition of Done
 
-- bash -n scripts/overclock_cli_loop.sh passes
+- bash -n scripts/gatekeeper_cli_loop.sh passes
 - tests/test_verdict_parsing.sh passes
 - Attempt-1 APPROVE case passes
 - Deterministic retry case passes
@@ -86,7 +86,7 @@ Target change:
 
 ### Current Critic Prompt Structure
 
-Located at line ~620 in `scripts/overclock_cli_loop.sh`:
+Located at line ~620 in `scripts/gatekeeper_cli_loop.sh`:
 
 ```
 1. Write a checklist of what must be proven.
@@ -98,7 +98,7 @@ Located at line ~620 in `scripts/overclock_cli_loop.sh`:
 ### Target Critic-Prep Prompt
 
 ```
-You are the Critic-Prep in an Overclock workflow.
+You are the Critic-Prep in an GateKeeper workflow.
 
 Your job: Before any code is written, define what evidence proves the task is complete.
 
@@ -122,7 +122,7 @@ Format (EXACT):
 ### Target Critic-Review Prompt
 
 ```
-You are the Critic-Review in an Overclock workflow.
+You are the Critic-Review in an GateKeeper workflow.
 
 Your job: Check if the patch provides evidence for EVERY pre-written checklist item.
 

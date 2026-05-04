@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Overclock evaluator for cpp-trader-backtester
+# GateKeeper evaluator for cpp-trader-backtester
 # Runs Debug/ASan build for correctness tests, Release build for benchmark smoke
 #
 # Expected environment:
-#   OVERCLOCK_WORKTREE - path to the git worktree (set by overclock_cli_loop.sh)
+#   GATEKEEPER_WORKTREE - path to the git worktree (set by gatekeeper_cli_loop.sh)
 #
 # Design rationale:
 #   - Tests use assert() which is compiled out in Release mode (-DNDEBUG)
@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-PROJECT_DIR="${OVERCLOCK_WORKTREE:-.}/cpp-trader-backtester"
+PROJECT_DIR="${GATEKEEPER_WORKTREE:-.}/cpp-trader-backtester"
 DEBUG_DIR="$PROJECT_DIR/build-debug"
 RELEASE_DIR="$PROJECT_DIR/build-release"
 

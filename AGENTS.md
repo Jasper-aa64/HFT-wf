@@ -7,7 +7,7 @@ Personal workspace for quant engineering, agentic workflows, and technical blog 
 | Directory | Purpose |
 |---|---|
 | `01-博客与资料/` | Blog notes and article summaries |
-| `02-Agent-Driven Workflow/01. Agent-Driven Workflow.md` | Overclock Mode, autonomous optimization loop, agent review patterns |
+| `02-Agent-Driven Workflow/01. Agent-Driven Workflow.md` | GateKeeper Mode, autonomous optimization loop, agent review patterns |
 | `cpp-trader-backtester-main/` | C++ low-latency order book backtester |
 | `.trellis/spec/` | Reusable specs for AI-generated artifacts |
 

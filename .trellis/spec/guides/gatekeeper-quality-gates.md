@@ -1,26 +1,26 @@
-# Overclock Quality Gates Guide
+# GateKeeper Quality Gates Guide
 
-> **Purpose**: Capture lessons from the Overclock workflow so future agent runs
+> **Purpose**: Capture lessons from the GateKeeper workflow so future agent runs
 > do not repeat the same evaluator, brief, and review mistakes.
 
-Use this guide before writing or reviewing any Overclock brief.
+Use this guide before writing or reviewing any GateKeeper brief.
 
 ---
 
 ## Core Model
 
-Overclock is not ordinary agent chat.
+GateKeeper is not ordinary agent chat.
 
 ```text
 Trellis  = memory, task context, lessons, specs
-Overclock = execution harness, adversarial review, retry/approve/escalate
+GateKeeper = execution harness, adversarial review, retry/approve/escalate
 ```
 
 The useful loop is:
 
 ```text
 Trellis task / spec
-  -> Overclock brief
+  -> GateKeeper brief
   -> Critic-Prep checklist
   -> Builder patch
   -> Executor evidence
@@ -29,7 +29,7 @@ Trellis task / spec
 ```
 
 If a run teaches a reusable lesson, write it back to Trellis. Do not leave it
-only in `overclock_runs/` or chat history.
+only in `gatekeeper_runs/` or chat history.
 
 ---
 
@@ -215,7 +215,7 @@ This pattern is the reference for future engine-boundary briefs.
 
 ## Post-Run Learning
 
-After every non-trivial Overclock run, record:
+After every non-trivial GateKeeper run, record:
 
 ```text
 brief name

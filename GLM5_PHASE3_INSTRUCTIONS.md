@@ -126,8 +126,43 @@ cat experiments/results.tsv
 ## TASK 1 OUTPUT
 <!-- GLM5 在此写下你的分析 -->
 
+**优化方案 A: 移除 PriceLevel 中冗余的 price 字段**
+- 原理: `PriceLevel.price` 已存在 map key 中，`add_order()` 中的 `level.price = order->price` 是冗余赋值
+- 改动: 删除 `PriceLevel.price` 成员，用 `it->first` (map key) 读取 price
+- 风险: 无，FIFO 语义不变，只影响存储结构
+
+**优化方案 B: 用 `std::deque<Order*>` 替代 `std::list<Order*>`** (备选)
+- 原理: deque 连续内存，cache locality 更好
+- 风险: 低，FIFO 语义不变
 
 ---
 
 ## DONE / ESCALATE
 <!-- GLM5 在此写下最终结果 -->
+
+## DONE
+
+**开始时间**: 2026-05-04 01:02:54
+**结束时间**: 2026-05-04 01:06:05
+**工作时长**: 约 3 分钟
+
+### 结果摘要
+
+| 指标 | 值 |
+|------|------|
+| 优化方案 | 移除 PriceLevel.price 冗余字段 |
+| 基线延迟 | 0.13237 µs/order |
+| 优化后延迟 | 0.12104 µs/order |
+| 改善幅度 | **8.56%** (目标 ≥3%) |
+| Commit | `427325d` |
+
+### 改动文件
+- `include/order_book.hpp` - 移除 PriceLevel.price 成员
+- `src/order_book.cpp` - 用 `it->first` 替代 `level.price`
+
+### 验证
+- ✅ test_order_book PASSED
+- ✅ test_strategies PASSED
+- ✅ test_types PASSED
+- ✅ invariant check PASSED
+- ✅ performance gate PASSED (8.56% ≥ 3%)

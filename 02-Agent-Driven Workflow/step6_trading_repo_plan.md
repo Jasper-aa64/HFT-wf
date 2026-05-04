@@ -1,6 +1,6 @@
 # Step 6 — Trading Project Adaptation
 
-Goal: Apply Overclock Mode to the real trading project.
+Goal: Apply GateKeeper Mode to the real trading project.
 
 ## Prerequisites
 
@@ -147,7 +147,7 @@ Trellis provides context, not execution:
 AGENTS.md              → Coding conventions
 ```
 
-The Overclock loop:
+The GateKeeper loop:
 - Reads spec for rules and conventions
 - Runs executor for evidence
 - Produces decision package for human
@@ -211,7 +211,7 @@ Human signature: ____________
 # Ensure evaluate.sh works
 ./scripts/evaluate.sh
 
-# Run Overclock loop with trading task
+# Run GateKeeper loop with trading task
 cd 02-Agent-Driven\ Workflow
 
 # Create a trading-specific step file or modify TASK in step4

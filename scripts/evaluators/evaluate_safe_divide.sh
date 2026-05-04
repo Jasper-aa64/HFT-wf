@@ -2,9 +2,9 @@
 #
 # Evaluator for safe_divide task
 #
-# Environment (set by overclock_cli_loop.sh):
-#   OVERCLOCK_WORKTREE - path to the worktree where changes were made
-#   OVERCLOCK_PROJECT_ROOT - path to main project root
+# Environment (set by gatekeeper_cli_loop.sh):
+#   GATEKEEPER_WORKTREE - path to the worktree where changes were made
+#   GATEKEEPER_PROJECT_ROOT - path to main project root
 #
 # This script ONLY checks - it does NOT create or modify any files.
 #
@@ -12,8 +12,8 @@
 set -euo pipefail
 
 # Determine where to run
-if [[ -n "${OVERCLOCK_WORKTREE:-}" ]]; then
-    WORK_DIR="$OVERCLOCK_WORKTREE"
+if [[ -n "${GATEKEEPER_WORKTREE:-}" ]]; then
+    WORK_DIR="$GATEKEEPER_WORKTREE"
 else
     WORK_DIR="$(pwd)"
 fi

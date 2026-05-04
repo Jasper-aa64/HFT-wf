@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Test verdict parsing logic for Overclock CLI
+# Test verdict parsing logic for GateKeeper CLI
 # Verifies default-reject posture and strict format requirements
 #
 

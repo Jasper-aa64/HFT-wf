@@ -1,6 +1,6 @@
 # Step 5 — Toy Repo Loop
 
-Goal: Apply the Overclock loop to a toy repository before touching the trading project.
+Goal: Apply the GateKeeper loop to a toy repository before touching the trading project.
 
 ## Why a Toy Repo First
 

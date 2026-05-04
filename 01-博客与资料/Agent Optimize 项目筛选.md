@@ -6,7 +6,7 @@
 > - **HFT 学习主项目**：`kpetridis24/lobsim` — L3 replay / simulator / event stream
 > - **First Optimize target**：`mansoor-mamnoon/limit-order-book` — clearer hot path, runnable benchmark, lower dependency friction
 > - **架构旁读**：`PandoraTrader` — 国内期货、CTP、实盘/回测分层
-> - **Overclock sandbox**：`cpp-trader-backtester` — 博客 1 质量门禁
+> - **GateKeeper sandbox**：`cpp-trader-backtester` — 博客 1 质量门禁
 >
 > **选择理由**：兼顾"学 HFT"而不只是"做一次好看的优化实验"。
 
@@ -23,7 +23,7 @@
 | Agent Optimize 主候选 | `mansoor-mamnoon/limit-order-book` | benchmark/tests/profiling 更现成，适合先接入优化闭环 |
 | Agent Optimize 备选 | `kpetridis24/lobsim` | 如果后续补出稳定 benchmark，可升级为优化实验项目 |
 | 国内交易系统旁读 | `PandoraTrader` | 学 CTP、实盘/回测分层、策略接口，不作为优化目标 |
-| Overclock sandbox | `cpp-trader-backtester` | 博客 1 质量门禁，不参与博客 2 选型 |
+| GateKeeper sandbox | `cpp-trader-backtester` | 博客 1 质量门禁，不参与博客 2 选型 |
 
 **为什么优先选 lobsim？**
 
@@ -76,7 +76,7 @@ limit-order-book:
 
 ## 1. 两篇博客的总体定位
 
-### Blog 1 — Overclock
+### Blog 1 — GateKeeper
 
 **主题**：Agentic quality gate for code changes
 
@@ -85,7 +85,7 @@ limit-order-book:
 **项目定位**：
 
 - 这是一个 sandbox，不追求项目本身足够真实
-- 重点展示 Overclock 如何作为质量门禁，约束 agent 修改代码
+- 重点展示 GateKeeper 如何作为质量门禁，约束 agent 修改代码
 - 关注编译、测试、静态检查、基准冒烟、allowed_files、failure feedback loop
 - 不把它包装成完整 HFT 系统
 
@@ -97,7 +97,7 @@ limit-order-book:
 
 ```
 agent proposes patch
-  -> overclock runs quality gate
+  -> gatekeeper runs quality gate
   -> compile / test / lint / benchmark smoke / invariant check
   -> failed result feeds back to agent
   -> agent repairs patch
@@ -182,7 +182,7 @@ select project
 
 | 标准 | 说明 |
 |---|---|
-| 有 CI | 更容易接入 Overclock gate |
+| 有 CI | 更容易接入 GateKeeper gate |
 | 有 profiling 入口 | 更容易找到 hot path |
 | 有 replay 数据路径 | 更接近真实市场数据处理 |
 | 有 Python bindings | 方便研究、可视化 |
@@ -396,7 +396,7 @@ benchmark path 不清楚
 
 ### 4.6 cpp-trader-backtester
 
-- **定位**：当前 sandbox，Overclock Blog 1 实验对象
+- **定位**：当前 sandbox，GateKeeper Blog 1 实验对象
 - **当前判断**：**只用于 Blog 1，不参与 Blog 2 选型**
 
 ---
@@ -433,7 +433,7 @@ human review boundary
 产出：
 
 ```
-Blog 1: Full Overclock Mode as an Agentic Quality Gate
+Blog 1: Full GateKeeper Mode as an Agentic Quality Gate
 ```
 
 ### Phase B：分工验证两个候选
@@ -694,7 +694,7 @@ Not: Optimization Benchmark Target
 初筛来源：GitHub README + 公开搜索结果（非本地验证）
 
 决定：
-1. Blog 1 先用 cpp-trader-backtester 写 Overclock 质量门禁
+1. Blog 1 先用 cpp-trader-backtester 写 GateKeeper 质量门禁
 2. Blog 2 不直接用 cpp-trader-backtester
 3. PandoraTrader 作为架构学习材料，不作为 optimize 主项目
 4. Optimize 主项目优先从 LOB / matching / replay 项目里选
@@ -766,8 +766,8 @@ Dependency policy:
 
 ### 博客准备
 
-- [ ] 写 Blog 1 大纲（Overclock quality gate）
-- [ ] 整理 Overclock 输出截图 / 日志
+- [ ] 写 Blog 1 大纲（GateKeeper quality gate）
+- [ ] 整理 GateKeeper 输出截图 / 日志
 - [ ] 项目选定后写 Blog 2 大纲
 - [ ] 记录项目筛选过程（包括失败项目，不只记成功）
 

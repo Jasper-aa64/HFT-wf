@@ -23,7 +23,7 @@ These guides help you **ask the right questions before coding**.
 |-------|---------|-------------|
 | [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md) | Identify patterns and reduce duplication | When you notice repeated patterns |
 | [Cross-Layer Thinking Guide](./cross-layer-thinking-guide.md) | Think through data flow across layers | Features spanning multiple layers |
-| [Overclock Quality Gates Guide](./overclock-quality-gates.md) | Capture Overclock evaluator, brief, and critic lessons | Before writing or reviewing an Overclock brief |
+| [GateKeeper Quality Gates Guide](./gatekeeper-quality-gates.md) | Capture GateKeeper evaluator, brief, and critic lessons | Before writing or reviewing an GateKeeper brief |
 
 ---
 
@@ -48,15 +48,15 @@ These guides help you **ask the right questions before coding**.
 
 → Read [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md)
 
-### When to Think About Overclock Quality Gates
+### When to Think About GateKeeper Quality Gates
 
-- [ ] You're writing or reviewing an Overclock brief
+- [ ] You're writing or reviewing an GateKeeper brief
 - [ ] A run produced `REJECT` or `ESCALATE`
 - [ ] A test passes but the Critic says evidence is missing
 - [ ] The task touches an API boundary or callback timing
 - [ ] The evaluator mixes correctness tests and benchmark runs
 
-→ Read [Overclock Quality Gates Guide](./overclock-quality-gates.md)
+→ Read [GateKeeper Quality Gates Guide](./gatekeeper-quality-gates.md)
 
 ---
 

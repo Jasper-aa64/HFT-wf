@@ -1,0 +1,4 @@
+2026-05-03T17:05:43	order_book	avg_latency_us_per_order	0.12104	µs/order	improvement=8.56%	commit=332d63c
+2026-05-03T17:10:13	order_book	avg_latency_us_per_order	0.12029	µs/order	improvement=9.13%	commit=f2b4c58
+2026-05-03T17:10:54	order_book	avg_latency_us_per_order	0.1199	µs/order	improvement=9.42%	commit=f2b4c58
+2026-05-04T02:58:35	order_book	avg_latency_us_per_order	0.1328	µs/order	improvement=-0.32%	commit=e006d72

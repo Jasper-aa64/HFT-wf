@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# overclock_cli_loop.sh — Overclock Mode CLI with Critic-Prep Checklist
+# gatekeeper_cli_loop.sh — GateKeeper Mode CLI with Critic-Prep Checklist
 #
 # Architecture:
 #   Critic-Prep = Codex CLI (generates checklist before patch)
@@ -30,15 +30,15 @@
 #   - Claude Code and Codex CLI must be authenticated
 #
 # Usage:
-#   ./scripts/overclock_cli_loop.sh [--apply] [--max-attempts N] <brief.md>
+#   ./scripts/gatekeeper_cli_loop.sh [--apply] [--max-attempts N] <brief.md>
 #
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-RUNS_DIR="$PROJECT_ROOT/overclock_runs"
-WORKTREES_DIR="$PROJECT_ROOT/.overclock_worktrees"
+RUNS_DIR="$PROJECT_ROOT/gatekeeper_runs"
+WORKTREES_DIR="$PROJECT_ROOT/.gatekeeper_worktrees"
 
 # ── Parse Args ────────────────────────────────────────────────────────────────
 
@@ -292,7 +292,7 @@ echo "=== Pre-flight Checks ==="
 if ! git -C "$PROJECT_ROOT" rev-parse --git-dir &>/dev/null; then
     echo "ERROR: Not a git repository"
     echo ""
-    echo "Overclock requires git for worktree isolation."
+    echo "GateKeeper requires git for worktree isolation."
     echo "Initialize with:"
     echo "  cd $PROJECT_ROOT && git init && git add . && git commit -m 'init'"
     exit 1
@@ -370,10 +370,10 @@ RUN_DIR="$RUNS_DIR/$TIMESTAMP"
 mkdir -p "$RUN_DIR"
 
 # Create worktree branch and path
-WORKTREE_BRANCH="overclock/$TIMESTAMP"
+WORKTREE_BRANCH="gatekeeper/$TIMESTAMP"
 WORKTREE_PATH="$WORKTREES_DIR/$TIMESTAMP"
 
-echo "=== OVERCLOCK CLI LOOP (Retry Loop v1) ==="
+echo "=== GATEKEEPER CLI LOOP (Retry Loop v1) ==="
 echo "Time: $TIMESTAMP"
 echo "Run dir: $RUN_DIR"
 echo "Worktree: $WORKTREE_PATH"
@@ -421,7 +421,7 @@ echo ">>> Phase 0: Critic-Prep (Generate Checklist)"
 # Build critic-prep prompt
 # Include current state of allowed target files if they exist
 cat > "$RUN_DIR/critic_prep_prompt.md" << 'CRITIC_PREP_HEADER'
-You are the Critic-Prep in an Overclock workflow.
+You are the Critic-Prep in an GateKeeper workflow.
 
 Your job: Before any code is written, define what evidence proves the task is complete.
 
@@ -618,7 +618,7 @@ while [[ $ATTEMPT -le $MAX_ATTEMPTS ]]; do
     # Build prompt - original for first attempt, retry prompt for subsequent
     if [[ $ATTEMPT -eq 1 ]]; then
         cat > "$ATTEMPT_DIR/builder_prompt.md" << PROMPT
-You are the Builder in an Overclock workflow.
+You are the Builder in an GateKeeper workflow.
 
 Your job: Write the smallest patch that satisfies the task.
 
@@ -642,7 +642,7 @@ PROMPT
 
         # Build retry prompt incrementally (like critic_prompt.md)
         cat > "$ATTEMPT_DIR/builder_prompt.md" << 'RETRY_HEADER'
-You are the Builder in an Overclock workflow.
+You are the Builder in an GateKeeper workflow.
 
 Previous attempt was rejected.
 RETRY_HEADER
@@ -813,11 +813,11 @@ RETRY_FOOTER
     cd "$WORKTREE_PATH"
 
     # Set environment variable so evaluator knows worktree path
-    export OVERCLOCK_WORKTREE="$WORKTREE_PATH"
-    export OVERCLOCK_PROJECT_ROOT="$PROJECT_ROOT"
-    export OVERCLOCK_RUN_DIR="$RUN_DIR"
-    export OVERCLOCK_ATTEMPT="$ATTEMPT"
-    export OVERCLOCK_ATTEMPT_DIR="$ATTEMPT_DIR"
+    export GATEKEEPER_WORKTREE="$WORKTREE_PATH"
+    export GATEKEEPER_PROJECT_ROOT="$PROJECT_ROOT"
+    export GATEKEEPER_RUN_DIR="$RUN_DIR"
+    export GATEKEEPER_ATTEMPT="$ATTEMPT"
+    export GATEKEEPER_ATTEMPT_DIR="$ATTEMPT_DIR"
 
     "$PROJECT_ROOT/$EVAL_SCRIPT" > "$ATTEMPT_DIR/eval.log" 2>&1
     EVAL_EXIT=$?
@@ -851,7 +851,7 @@ RETRY_FOOTER
 
     # Build critic prompt with pre-written checklist
     cat > "$ATTEMPT_DIR/critic_prompt.md" << 'CRITIC_HEADER'
-You are the Critic-Review in an Overclock workflow.
+You are the Critic-Review in an GateKeeper workflow.
 You did NOT write this patch.
 
 Default posture: REJECT unless the patch proves itself with evidence.
