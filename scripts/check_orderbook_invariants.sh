@@ -3,12 +3,12 @@
 # Any deviation means a correctness regression — exit 1.
 #
 # Usage: ./check_orderbook_invariants.sh
-# OVERCLOCK_WORKTREE env var sets project root (default: .)
+# GATEKEEPER_WORKTREE env var sets project root (default: .)
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="${OVERCLOCK_WORKTREE:-.}/cpp-trader-backtester"
+PROJECT_DIR="${GATEKEEPER_WORKTREE:-.}/cpp-trader-backtester"
 DEBUG_DIR="$PROJECT_DIR/build-debug"
 GOLDEN="$SCRIPT_DIR/golden/orderbook_invariants.txt"
 

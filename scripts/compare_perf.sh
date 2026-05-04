@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-PROJECT_DIR="${OVERCLOCK_WORKTREE:-.}/cpp-trader-backtester"
+PROJECT_DIR="${GATEKEEPER_WORKTREE:-.}/cpp-trader-backtester"
 RELEASE_DIR="$PROJECT_DIR/build-release"
 BASELINE_FILE="$PROJECT_DIR/experiments/baseline.tsv"
 RESULTS_FILE="$PROJECT_DIR/experiments/results.tsv"
