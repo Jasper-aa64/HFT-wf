@@ -8,22 +8,23 @@ Use it whenever generating or revising images for technical notes, especially AI
 
 ## Target Style
 
-The preferred style is a **hand-drawn technical notebook illustration**.
+The preferred style is an **academic graphite pencil technical illustration**.
 
 It should feel like:
 
-- a sketch from a technical notebook,
-- a classroom whiteboard diagram,
-- a clean engineering explainer card,
-- or a Chinese technical blog / Zhihu-style knowledge illustration.
+- a figure from a scientific journal or engineering textbook,
+- a precise technical drawing rendered in graphite on white paper,
+- an architectural or mechanical diagram with careful cross-hatching,
+- a classroom blackboard diagram drawn with precision and intent.
 
 It should not feel like:
 
+- a colorful hand-drawn cartoon or doodle,
 - a dark SaaS landing-page hero,
 - a glossy product marketing banner,
 - a neon cyberpunk graphic,
-- a generic AI stock image,
-- or an abstract UI dashboard mockup.
+- a watercolor notebook sketch,
+- a generic AI stock image.
 
 ---
 
@@ -31,104 +32,93 @@ It should not feel like:
 
 ### 1. Medium
 
-Use a paper-based visual language:
+Use a clean white or very light cream paper background.
 
-- off-white paper,
-- light graph paper,
-- notebook page,
-- drafting board,
-- whiteboard,
-- or hand-drawn slide.
+Do **not** use graph paper grids, notebook rulings, or textured backgrounds.
+The paper should be plain, like a blank technical drawing sheet.
 
-The image should look drawn, annotated, and explained, not rendered as a polished app screen.
+The image should look like a precise pencil drawing made by an engineer or scientist, not a colorful doodle.
 
 ### 2. Linework
 
 Prefer:
 
-- pencil sketch lines,
-- slightly imperfect hand-drawn outlines,
-- gray or dark graphite strokes,
-- thin technical diagram lines,
-- hand-drawn arrows and callouts.
+- precise, confident graphite pencil lines,
+- careful cross-hatching and parallel hatching for shading and depth,
+- thin technical diagram lines for structure,
+- clean ruled arrows and callout lines,
+- architectural or mechanical rendering conventions.
 
 Avoid:
 
+- imperfect wobbly cartoon sketch lines,
+- watercolor washes or ink splashes,
 - glossy 3D rendering,
 - hard vector corporate icons,
-- heavy gradients,
-- photorealism,
-- dense UI cards.
+- heavy color gradients,
+- photorealism.
 
 ### 3. Color Palette
 
-Use muted, low-saturation color accents:
+**Monochrome graphite only.** No color fills. No color accents.
 
-- pale green,
-- light blue,
-- beige,
-- soft brown,
-- warm gray,
-- muted yellow.
+Use only:
 
-The base should remain light and paper-like.
+- white paper background,
+- graphite gray for lines, hatching, and shading,
+- black for emphasis lines and text.
 
-Avoid:
+If a subtle second tone is absolutely necessary (e.g., to separate two panels in a comparison), use a very light wash of warm gray — not green, not blue, not amber.
 
-- dark navy/charcoal gradient backgrounds,
-- neon cyan/purple glow,
-- saturated commercial SaaS palettes,
-- high-contrast cyberpunk colors.
+Avoid all color: no pale green, no light blue, no beige accents, no watercolor.
 
 ### 4. Composition
 
-Use concrete engineering metaphors:
+Use concrete engineering metaphors rendered as precise technical objects:
 
 - balance scales,
-- maps and signposts,
-- pipelines,
-- drafting boards,
-- greenhouse / incubator systems,
-- circuit trees,
-- checklists,
-- index cards,
-- books/manuals,
-- flow arrows,
-- machinery with visible inputs and outputs.
+- mechanical presses or stamps,
+- architectural gateways or colonnades,
+- pipeline cross-sections,
+- drafting board diagrams,
+- checklist clipboards,
+- terminal screens under glass domes,
+- wire bundles and conduits,
+- flow diagrams with clear directional arrows.
 
-The image should explain an idea through a clear metaphor rather than simply decorate the page.
+The image should explain an idea through a precisely rendered metaphor, not through abstract decoration.
 
 ### 5. Text
 
-Text should be sparse and legible.
+All text must be in **English only**. No Chinese characters inside illustrations.
 
-Preferred text usage:
+Text should be sparse and legible:
 
 - one clear title,
 - one short subtitle,
-- 2-4 labels,
-- short captions or callouts.
+- 2–5 labels or callouts,
+- short technical annotations.
+
+Use clean technical serif or sans-serif lettering (like a drafting font or academic figure caption). Avoid decorative or handwritten fonts.
 
 Avoid:
 
 - long paragraphs inside the image,
-- small dense text,
+- small dense text blocks,
 - many overlapping labels,
 - decorative text that does not explain the concept.
-
-For English articles, English text is preferred. Chinese labels are acceptable when the surrounding article or concept is Chinese-language.
 
 ### 6. Layout
 
 Preferred layouts:
 
-- side-by-side comparison,
-- three-panel explanation,
-- single metaphor with callout lines,
-- matrix/table drawn as a whiteboard,
-- process flow on a notebook page.
+- side-by-side comparison (two-panel),
+- sequential pipeline left-to-right,
+- single central object with callout lines,
+- stacked timeline comparison,
+- arcade / colonnade of objects in sequence.
 
-Keep the structure readable at blog width.
+Keep the structure readable at blog width (16:9 aspect ratio).
 
 ---
 
@@ -137,61 +127,60 @@ Keep the structure readable at blog width.
 Use this template when asking for a generated illustration:
 
 ```text
-Create a 16:9 hand-drawn technical blog illustration.
-Style: off-white graph-paper or notebook background, pencil sketch linework,
-subtle hand-drawn borders, muted watercolor accents in pale green, light blue,
-beige, soft brown, and warm gray.
+Academic graphite pencil illustration on clean white paper. 16:9.
+Style: precise technical linework, careful cross-hatching for shading
+and depth, monochrome graphite only — no color, no watercolor,
+no graph-paper grid. Scientific journal or engineering textbook style.
+NOT cartoon. NOT colorful. Precise and academic.
 
 Topic: <topic>
 
-Main metaphor: <concrete metaphor, e.g. map vs manual, greenhouse system,
-balance scale, pipeline, drafting board>.
+Main metaphor: <concrete object — e.g. classical arcade of four archways,
+mechanical stamp cross-section, wire bundle passing through gates,
+balance scale, two-panel dissection diagram>.
 
-Text to include:
-- Title: "<title>"
-- Subtitle: "<subtitle>"
-- Labels: "<short label 1>", "<short label 2>", ...
+Layout: <side-by-side / stacked timelines / single object with callouts /
+left-to-right pipeline>.
 
-Composition:
-<describe side-by-side / three panels / central object with callouts>.
+Objects and labels:
+- <element 1>: labeled "<English label>"
+- <element 2>: labeled "<English label>"
+- ...
 
-Avoid dark gradients, glossy SaaS UI, neon colors, photorealism,
-generic AI imagery, brand logos, and dense paragraphs.
-Ensure all text is large and legible.
+Title (at top, large): "<Title>"
+Subtitle (below title): "<Subtitle in English>"
+Footer caption: "<one-line annotation>"
+
+All text in English. No Chinese characters.
+No color fills. No gradients. Monochrome graphite only.
 ```
 
 ---
 
-## Example: "Map, Not Manual"
+## Reference Images
 
-Good direction:
+The two canonical reference images for this style are:
 
-- off-white graph-paper background,
-- title: `Map, Not Manual`,
-- left side: overloaded book/manual with tangled pages,
-- right side: clean map board with `AGENTS.md` connected to `docs/`, `scripts/`, `tests/`, and `reference-projects/`,
-- small icons such as compass, signpost, checklist, arrows,
-- sparse explanatory text.
+**Reference A — Tangled rope vs. infinity loop:**
+Precise pencil rendering on white background. Fine overlapping linework for the rope tangle; smooth controlled curves for the infinity loop. Clean printed annotations above and below each object. No color. Academic and composed.
 
-Bad direction:
+**Reference B — Classical temple colonnade:**
+Architectural pencil rendering with detailed cross-hatching on stonework. Three objects (clipboard, CPU under glass dome, compass) sit on plinths between columns. Text annotations below each column. Monochrome gray tones. Structured and precise.
 
-- dark navy gradient,
-- glowing SaaS dashboard cards,
-- many generic UI boxes,
-- neon cyber AI background,
-- abstract "AI agent" icons without explanatory structure.
+New illustrations should match the visual weight and precision of these references.
 
 ---
 
 ## Quality Checklist
 
-Before accepting an illustration, check:
+Before accepting an illustration, verify:
 
-- [ ] Does it look like a technical notebook / hand-drawn explainer?
-- [ ] Is the background light, paper-like, and not glossy?
-- [ ] Are colors muted and low-saturation?
-- [ ] Is the metaphor concrete and readable?
-- [ ] Is the text sparse and legible?
+- [ ] Does it look like a technical journal figure or textbook plate?
+- [ ] Is the background clean white or very light cream (no grid, no texture)?
+- [ ] Is the image fully monochrome graphite — no color anywhere?
+- [ ] Is the linework precise, not wobbly or cartoon-like?
+- [ ] Is cross-hatching used for shading instead of color fills?
+- [ ] Is all text in English, sparse, and legible?
+- [ ] Is the metaphor concrete and rendered as a real object?
 - [ ] Does the image explain the article section rather than merely decorate it?
-- [ ] Does it avoid dark SaaS hero aesthetics?
-
+- [ ] Does it avoid cartoon, watercolor, and SaaS aesthetics?

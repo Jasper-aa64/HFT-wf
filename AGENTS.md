@@ -1,29 +1,3 @@
-# Quant Workspace
-
-Personal workspace for quant engineering, agentic workflows, and technical blog notes.
-
-## Project Map
-
-| Directory | Purpose |
-|---|---|
-| `01-博客与资料/` | Blog notes and article summaries |
-| `02-Agent-Driven Workflow/01. Agent-Driven Workflow.md` | GateKeeper Mode, autonomous optimization loop, agent review patterns |
-| `cpp-trader-backtester-main/` | C++ low-latency order book backtester |
-| `.trellis/spec/` | Reusable specs for AI-generated artifacts |
-
-## Key Specs
-
-- **Illustration style**: `.trellis/spec/guides/illustration-style.md`  
-  Hand-drawn notebook aesthetic. No dark SaaS gradients. Read before generating any blog visual.
-
-## Documentation Rules
-
-- Write all project notes and specs in English.
-- Keep source references at the end when summarizing an external article.
-- "Map, not manual" — short navigation in top-level docs, details in linked files.
-
----
-
 <!-- TRELLIS:START -->
 # Trellis Instructions
 
@@ -53,3 +27,29 @@ If you're using Codex or another agent-capable tool, additional project-scoped h
 Managed by Trellis. Edits outside this block are preserved; edits inside may be overwritten by a future `trellis update`.
 
 <!-- TRELLIS:END -->
+
+---
+
+# Quant Workspace
+
+Personal workspace for quant engineering, agentic workflows, and technical blog notes.
+
+## Project Map
+
+| Directory | Purpose |
+|---|---|
+| `01-博客与资料/` | Blog notes and article summaries |
+| `02-Agent-Driven Workflow/01. Agent-Driven Workflow.md` | GateKeeper Mode, autonomous optimization loop, agent review patterns |
+| `cpp-trader-backtester-main/` | C++ low-latency order book backtester |
+| `.trellis/spec/` | Reusable specs for AI-generated artifacts |
+
+## Key Specs
+
+- **Illustration style**: `.trellis/spec/guides/illustration-style.md`  
+  Hand-drawn notebook aesthetic. No dark SaaS gradients. Read before generating any blog visual.
+
+## Documentation Rules
+
+- Write all project notes and specs in English.
+- Keep source references at the end when summarizing an external article.
+- "Map, not manual" — short navigation in top-level docs, details in linked files.
