@@ -1,0 +1,9 @@
+mode=linux_candidate_bar_template_compare
+compare=true
+factor=5447 params=1,3,5,10
+started_at=20260508_172710
+compare_rc=0
+compare_seconds=132
+output_parquet_count=8
+compare_error_grep_count=0
+log_dir=/root/work/Code1/psi-trader-liangjunming/timing_logs/linux_candidate_bar_template_compare_20260508_172710

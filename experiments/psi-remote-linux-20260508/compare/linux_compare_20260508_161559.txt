@@ -1,0 +1,16 @@
+mode=linux_compare
+compare=true
+factor=5447 params=1,3,5,10
+started_at=20260508_161559
+cold_rc=0
+cold_seconds=141
+warmup_rc=0
+warmup_seconds=139
+run1_rc=0
+run1_seconds=140
+run2_rc=0
+run2_seconds=142
+run3_rc=0
+run3_seconds=140
+output_parquet_count=8
+log_dir=/root/work/Code1/psi-trader-liangjunming/timing_logs/linux_compare_20260508_161559

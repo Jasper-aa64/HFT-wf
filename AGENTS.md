@@ -47,6 +47,8 @@ Personal workspace for quant engineering, agentic workflows, and technical blog 
 
 - **Illustration style**: `.trellis/spec/guides/illustration-style.md`  
   Hand-drawn notebook aesthetic. No dark SaaS gradients. Read before generating any blog visual.
+- **Remote execution workspace topology**: `.trellis/spec/guides/remote-execution-workflow.md`  
+  Keep the local Trellis + project mirror as the control plane, and use the remote machine as the execution plane.
 
 ## Documentation Rules
 

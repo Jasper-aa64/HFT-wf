@@ -1,0 +1,11 @@
+source=remote-linux
+mode=no_compare
+compare=false
+factor=5447 params=1,3,5,10
+baseline_runs=run1,run2,run3
+non_baseline_runs=cold,warmup
+median=72
+mean=71.67
+output_parquet_count=8
+raw_result_file=HFT-wf/experiments/psi-remote-linux-20260508/no_compare/linux_original_baseline_20260508_155348.txt
+log_dir=HFT-wf/experiments/psi-remote-linux-20260508/no_compare/linux_original_baseline_20260508_155348

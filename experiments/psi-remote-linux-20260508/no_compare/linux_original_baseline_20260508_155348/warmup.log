@@ -1,0 +1,230 @@
+[FmtLog] Start Log Thread Affinity Success! Cpu Core:14
+15:55:00.499046 PsiRunner.cpp:37 INF[5655  ] PsiRunner::config read config.yaml
+15:55:00.500784 PsiRunner.cpp:88 INF[5655  ] PsiRunner::config Read basefiles
+15:55:00.500844 PsiFactorPipeline.cpp:35 INF[5655  ] PsiFactorPipeline::init 4 factor tasks, 1 workers.
+15:55:00.500845 PsiRunner.cpp:170 INF[5655  ] PsiRunner::run start file:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+15:55:00.501111 PsiStockThread.cpp:28 INF[5658  ] PsiStockThread::run pthread_setaffinity_np success, cpuCore:18
+Loaded 15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+6512302 rows in 47 columns.
+Unique stock codes: 2348
+15:55:20.594481 PsiReadWrite.cpp:362 INF[5655  ] readParquet handlerData cost time :19692500784 PsiRunner.cpp:88 INF[5655  ] PsiRunner::config Read basefiles
+15:55:00.500844 PsiFactorPipeline.cpp:35 INF[5655  ] PsiFactorPipeline::init 4 factor tasks, 1 workers.
+15:55:00.500845 PsiRunner.cpp:170 INF[5655  ] PsiRunner::run start file:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+15:55:00.501111 PsiStockThread.cpp:28 INF[5658  ] PsiStockThread::run pthread_setaffinity_np success, cpuCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:20.595131 PsiFactorPipeline.cpp:116 INF[5655  ] compute factor factorType:5447, nType:1, mType:0.pp:35 INF[5655  ] PsiFactorPipeline::init 4 factor tasks, 1 workers.
+15:55:00.500845 PsiRunner.cpp:170 INF[5655  ] PsiRunner::run start file:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+15:55:00.501111 PsiStockThread.cpp:28 INF[5658  ] PsiStockThread::run pthread_setaffinity_np success, cpuCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:21.715818 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5447 done, cost:1120mspp:170 INF[5655  ] PsiRunner::run start file:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+15:55:00.501111 PsiStockThread.cpp:28 INF[5658  ] PsiStockThread::run pthread_setaffinity_np success, cpuCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:24.477514 PsiReadWrite.cpp:377 INF[5655  ] readParquet generate_table and write cost time :27625131 PsiFactorPipeline.cpp:116 INF[5655  ] compute factor factorType:5447, nType:1, mType:0.
+15:55:21.715818 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5447 done, cost:1120ms
+p:170 INF[5655  ] PsiRunner::run start file:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+15:55:00.501111 PsiStockThread.cpp:28 INF[5658  ] PsiStockThread::run pthread_setaffinity_np success, cpuCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:24.544393 PsiReadWrite.cpp:392 INF[5655  ] readParquet clearData cost time :67Type:0.
+15:55:21.715818 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5447 done, cost:1120ms
+p:170 INF[5655  ] PsiRunner::run start file:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+15:55:00.501111 PsiStockThread.cpp:28 INF[5658  ] PsiStockThread::run pthread_setaffinity_np success, cpuCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:24.544488 PsiFactorPipeline.cpp:116 INF[5655  ] compute factor factorType:5448, nType:3, mType:0.p:170 INF[5655  ] PsiRunner::run start file:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+15:55:00.501111 PsiStockThread.cpp:28 INF[5658  ] PsiStockThread::run pthread_setaffinity_np success, cpuCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:25.710777 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5448 done, cost:1166ms22014010220140102_0_N.parquet.
+15:55:00.501111 PsiStockThread.cpp:28 INF[5658  ] PsiStockThread::run pthread_setaffinity_np success, cpuCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:28.420689 PsiReadWrite.cpp:377 INF[5655  ] readParquet generate_table and write cost time :2710
+15:55:24.544393 PsiReadWrite.cpp:392 INF[5655  ] readParquet clearData cost time :67
+15:55:24.544488 PsiFactorPipeline.cpp:116 INF[5655  ] compute factor factorType:5448, nType:3, mType:0.
+15:55:25.710777 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5448 done, cost:1166ms
+2014010220140102_0_N.parquet.
+15:55:00.501111 PsiStockThread.cpp:28 INF[5658  ] PsiStockThread::run pthread_setaffinity_np success, cpuCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:28.487811 PsiReadWrite.cpp:392 INF[5655  ] readParquet clearData cost time :67
+15:55:24.544488 PsiFactorPipeline.cpp:116 INF[5655  ] compute factor factorType:5448, nType:3, mType:0.
+15:55:25.710777 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5448 done, cost:1166ms
+2014010220140102_0_N.parquet.
+15:55:00.501111 PsiStockThread.cpp:28 INF[5658  ] PsiStockThread::run pthread_setaffinity_np success, cpuCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:28.487906 PsiFactorPipeline.cpp:116 INF[5655  ] compute factor factorType:5449, nType:5, mType:0.
+15:55:25.710777 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5448 done, cost:1166ms
+2014010220140102_0_N.parquet.
+15:55:00.501111 PsiStockThread.cpp:28 INF[5658  ] PsiStockThread::run pthread_setaffinity_np success, cpuCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:29.658260 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5449 done, cost:1171ms
+2014010220140102_0_N.parquet.
+15:55:00.501111 PsiStockThread.cpp:28 INF[5658  ] PsiStockThread::run pthread_setaffinity_np success, cpuCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:32.408542 PsiReadWrite.cpp:377 INF[5655  ] readParquet generate_table and write cost time :2750
+15:55:28.487811 PsiReadWrite.cpp:392 INF[5655  ] readParquet clearData cost time :67
+15:55:28.487906 PsiFactorPipeline.cpp:116 INF[5655  ] compute factor factorType:5449, nType:5, mType:0.
+15:55:29.658260 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5449 done, cost:1171ms
+2014010220140102_0_N.parquet.
+15:55:00.501111 PsiStockThread.cpp:28 INF[5658  ] PsiStockThread::run pthread_setaffinity_np success, cpuCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:32.476240 PsiReadWrite.cpp:392 INF[5655  ] readParquet clearData cost time :68
+15:55:28.487906 PsiFactorPipeline.cpp:116 INF[5655  ] compute factor factorType:5449, nType:5, mType:0.
+15:55:29.658260 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5449 done, cost:1171ms
+2014010220140102_0_N.parquet.
+15:55:00.501111 PsiStockThread.cpp:28 INF[5658  ] PsiStockThread::run pthread_setaffinity_np success, cpuCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:32.476360 PsiFactorPipeline.cpp:116 INF[5655  ] compute factor factorType:5450, nType:10, mType:0.15:55:29.658260 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5449 done, cost:1171ms
+2014010220140102_0_N.parquet.
+15:55:00.501111 PsiStockThread.cpp:28 INF[5658  ] PsiStockThread::run pthread_setaffinity_np success, cpuCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:33.740313 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5450 done, cost:1264ms2014010220140102_0_N.parquet.
+15:55:00.501111 PsiStockThread.cpp:28 INF[5658  ] PsiStockThread::run pthread_setaffinity_np success, cpuCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:36.616181 PsiReadWrite.cpp:377 INF[5655  ] readParquet generate_table and write cost time :2876
+15:55:32.476240 PsiReadWrite.cpp:392 INF[5655  ] readParquet clearData cost time :68
+15:55:32.476360 PsiFactorPipeline.cpp:116 INF[5655  ] compute factor factorType:5450, nType:10, mType:0.
+15:55:33.740313 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5450 done, cost:1264ms
+014010220140102_0_N.parquet.
+15:55:00.501111 PsiStockThread.cpp:28 INF[5658  ] PsiStockThread::run pthread_setaffinity_np success, cpuCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:36.683374 PsiReadWrite.cpp:392 INF[5655  ] readParquet clearData cost time :67
+15:55:32.476360 PsiFactorPipeline.cpp:116 INF[5655  ] compute factor factorType:5450, nType:10, mType:0.
+15:55:33.740313 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5450 done, cost:1264ms
+014010220140102_0_N.parquet.
+15:55:00.501111 PsiStockThread.cpp:28 INF[5658  ] PsiStockThread::run pthread_setaffinity_np success, cpuCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:36.683413 PsiRunner.cpp:170 INF[5655  ] PsiRunner::run start file:/root/work/Code1/dataset/original/original/S1020301022014010320140103_0_N.parquet.5  ] compute factorType:5450 done, cost:1264ms
+014010220140102_0_N.parquet.
+15:55:00.501111 PsiStockThread.cpp:28 INF[5658  ] PsiStockThread::run pthread_setaffinity_np success, cpuCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+Loaded 6683386 rows in 47 columns.
+15:55:38.574218 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :392,filename:/root/work/Code1/dataset/original/original/S1020301022014010320140103_0_N.parquet.cpuCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+Unique stock codes: 2341
+15:55:54.611012 PsiReadWrite.cpp:362 INF[5655  ] readParquet handlerData cost time :16037t time :2876
+15:55:36.683374 PsiReadWrite.cpp:392 INF[5655  ] readParquet clearData cost time :67
+15:55:36.683413 PsiRunner.cpp:170 INF[5655  ] PsiRunner::run start file:/root/work/Code1/dataset/original/original/S1020301022014010320140103_0_N.parquet.
+15:55:38.574218 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :392,filename:/root/work/Code1/dataset/original/original/S1020301022014010320140103_0_N.parquet.
+puCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:54.611548 PsiFactorPipeline.cpp:116 INF[5655  ] compute factor factorType:5447, nType:1, mType:0.36.683413 PsiRunner.cpp:170 INF[5655  ] PsiRunner::run start file:/root/work/Code1/dataset/original/original/S1020301022014010320140103_0_N.parquet.
+15:55:38.574218 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :392,filename:/root/work/Code1/dataset/original/original/S1020301022014010320140103_0_N.parquet.
+puCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:55.729039 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5447 done, cost:1118msnal/original/S1020301022014010320140103_0_N.parquet.
+15:55:38.574218 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :392,filename:/root/work/Code1/dataset/original/original/S1020301022014010320140103_0_N.parquet.
+puCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:58.528009 PsiReadWrite.cpp:377 INF[5655  ] readParquet generate_table and write cost time :27991548 PsiFactorPipeline.cpp:116 INF[5655  ] compute factor factorType:5447, nType:1, mType:0.
+15:55:55.729039 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5447 done, cost:1118ms
+al/original/S1020301022014010320140103_0_N.parquet.
+15:55:38.574218 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :392,filename:/root/work/Code1/dataset/original/original/S1020301022014010320140103_0_N.parquet.
+puCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:58.593394 PsiReadWrite.cpp:392 INF[5655  ] readParquet clearData cost time :65Type:0.
+15:55:55.729039 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5447 done, cost:1118ms
+al/original/S1020301022014010320140103_0_N.parquet.
+15:55:38.574218 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :392,filename:/root/work/Code1/dataset/original/original/S1020301022014010320140103_0_N.parquet.
+puCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:58.593490 PsiFactorPipeline.cpp:116 INF[5655  ] compute factor factorType:5448, nType:3, mType:0.al/original/S1020301022014010320140103_0_N.parquet.
+15:55:38.574218 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :392,filename:/root/work/Code1/dataset/original/original/S1020301022014010320140103_0_N.parquet.
+puCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:55:59.715403 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5448 done, cost:1122ms5  ] readParquet ReadTable cost time :392,filename:/root/work/Code1/dataset/original/original/S1020301022014010320140103_0_N.parquet.
+puCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:56:02.543912 PsiReadWrite.cpp:377 INF[5655  ] readParquet generate_table and write cost time :2828
+15:55:58.593394 PsiReadWrite.cpp:392 INF[5655  ] readParquet clearData cost time :65
+15:55:58.593490 PsiFactorPipeline.cpp:116 INF[5655  ] compute factor factorType:5448, nType:3, mType:0.
+15:55:59.715403 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5448 done, cost:1122ms
+  ] readParquet ReadTable cost time :392,filename:/root/work/Code1/dataset/original/original/S1020301022014010320140103_0_N.parquet.
+puCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:56:02.615799 PsiReadWrite.cpp:392 INF[5655  ] readParquet clearData cost time :72
+15:55:58.593490 PsiFactorPipeline.cpp:116 INF[5655  ] compute factor factorType:5448, nType:3, mType:0.
+15:55:59.715403 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5448 done, cost:1122ms
+  ] readParquet ReadTable cost time :392,filename:/root/work/Code1/dataset/original/original/S1020301022014010320140103_0_N.parquet.
+puCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:56:02.615897 PsiFactorPipeline.cpp:116 INF[5655  ] compute factor factorType:5449, nType:5, mType:0.
+15:55:59.715403 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5448 done, cost:1122ms
+  ] readParquet ReadTable cost time :392,filename:/root/work/Code1/dataset/original/original/S1020301022014010320140103_0_N.parquet.
+puCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:56:03.811249 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5449 done, cost:1196ms
+  ] readParquet ReadTable cost time :392,filename:/root/work/Code1/dataset/original/original/S1020301022014010320140103_0_N.parquet.
+puCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:56:06.644560 PsiReadWrite.cpp:377 INF[5655  ] readParquet generate_table and write cost time :2833
+15:56:02.615799 PsiReadWrite.cpp:392 INF[5655  ] readParquet clearData cost time :72
+15:56:02.615897 PsiFactorPipeline.cpp:116 INF[5655  ] compute factor factorType:5449, nType:5, mType:0.
+15:56:03.811249 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5449 done, cost:1196ms
+  ] readParquet ReadTable cost time :392,filename:/root/work/Code1/dataset/original/original/S1020301022014010320140103_0_N.parquet.
+puCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:56:06.717186 PsiReadWrite.cpp:392 INF[5655  ] readParquet clearData cost time :73
+15:56:02.615897 PsiFactorPipeline.cpp:116 INF[5655  ] compute factor factorType:5449, nType:5, mType:0.
+15:56:03.811249 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5449 done, cost:1196ms
+  ] readParquet ReadTable cost time :392,filename:/root/work/Code1/dataset/original/original/S1020301022014010320140103_0_N.parquet.
+puCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:56:06.717289 PsiFactorPipeline.cpp:116 INF[5655  ] compute factor factorType:5450, nType:10, mType:0.15:56:03.811249 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5449 done, cost:1196ms
+  ] readParquet ReadTable cost time :392,filename:/root/work/Code1/dataset/original/original/S1020301022014010320140103_0_N.parquet.
+puCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:56:07.984604 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5450 done, cost:1267ms  ] readParquet ReadTable cost time :392,filename:/root/work/Code1/dataset/original/original/S1020301022014010320140103_0_N.parquet.
+puCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:56:10.868420 PsiReadWrite.cpp:377 INF[5655  ] readParquet generate_table and write cost time :2884
+15:56:06.717186 PsiReadWrite.cpp:392 INF[5655  ] readParquet clearData cost time :73
+15:56:06.717289 PsiFactorPipeline.cpp:116 INF[5655  ] compute factor factorType:5450, nType:10, mType:0.
+15:56:07.984604 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5450 done, cost:1267ms
+ ] readParquet ReadTable cost time :392,filename:/root/work/Code1/dataset/original/original/S1020301022014010320140103_0_N.parquet.
+puCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:56:10.940779 PsiReadWrite.cpp:392 INF[5655  ] readParquet clearData cost time :72
+15:56:06.717289 PsiFactorPipeline.cpp:116 INF[5655  ] compute factor factorType:5450, nType:10, mType:0.
+15:56:07.984604 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5450 done, cost:1267ms
+ ] readParquet ReadTable cost time :392,filename:/root/work/Code1/dataset/original/original/S1020301022014010320140103_0_N.parquet.
+puCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
+15:56:10.940803 PsiRunner.cpp:178 INF[5655  ] PsiRunner::run all files done.ype:5450, nType:10, mType:0.
+15:56:07.984604 PsiFactorPipeline.cpp:142 INF[5655  ] compute factorType:5450 done, cost:1267ms
+ ] readParquet ReadTable cost time :392,filename:/root/work/Code1/dataset/original/original/S1020301022014010320140103_0_N.parquet.
+puCore:18
+15:55:00.902336 PsiReadWrite.cpp:149 INF[5655  ] readParquet ReadTable cost time :375,filename:/root/work/Code1/dataset/original/original/S1020301022014010220140102_0_N.parquet.
+
