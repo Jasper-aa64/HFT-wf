@@ -60,6 +60,12 @@ def read_json(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
+def read_optional_json(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {}
+    return read_json(path)
+
+
 def read_optional_tsv(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
@@ -239,8 +245,10 @@ def build_markdown(
     history_rows: list[dict[str, str]] | None = None,
     history_path: Path | None = None,
     run_state: dict[str, object] | None = None,
+    failure_analysis: dict[str, object] | None = None,
 ) -> str:
     state = run_state or {}
+    failure_analysis = failure_analysis or {}
     patch_queue = patch_queue or []
     neutral_pool = neutral_pool or []
     retry_conditions = retry_conditions or []
@@ -341,6 +349,15 @@ def build_markdown(
         f"bundle audit `{sample_policy.get('bundle_audit_measured_samples', 7)}` measured. "
         "Screening rows are not promotion proof."
     )
+    failure_analysis_text = ""
+    if failure_analysis:
+        failure_reason = str(failure_analysis.get("reason") or state.get("failure_analysis_reason") or stop_reason)
+        failure_action = str(failure_analysis.get("next_round_action") or state.get("next_round_action") or "continue")
+        failure_tense = "before the next round" if failure_action == "continue" else "before the batch stopped"
+        failure_analysis_text = (
+            f"Failure analysis: reason `{failure_reason}` recorded {failure_tense}; "
+            f"batch continuation `{failure_action}`."
+        )
 
     title = f"{report_date} {TITLE_SUFFIX}"
     lines: list[str] = [
@@ -406,6 +423,7 @@ def build_markdown(
             noise_status_text,
             convergence_reason,
             sample_policy_text,
+            failure_analysis_text,
             "",
             "\u5f53\u524d\u4e0d\u80fd\u53ea\u6309\u6700\u5927 hotspot \u8d2a\u5fc3\u5c1d\u8bd5\u3002"
             "\u5b9e\u9a8c\u961f\u5217\u540c\u65f6\u4fdd\u7559 exploit\u3001reserve \u548c neutral stack\uff0c"
@@ -696,7 +714,7 @@ def main() -> int:
         control_dir = root / control_dir
 
     if args.report_root is None:
-        report_root = experiment_root_for_path(control_dir) / "reports"
+        report_root = control_dir / "reports"
     else:
         report_root = args.report_root
     if not report_root.is_absolute():
@@ -718,6 +736,7 @@ def main() -> int:
     patch_queue = read_optional_tsv(control_dir / "patch_queue.tsv")
     neutral_pool = read_optional_tsv(control_dir / "neutral_pool.tsv")
     retry_conditions = read_optional_tsv(control_dir / "retry_conditions.tsv")
+    failure_analysis = read_optional_json(control_dir / "failure_analysis.json")
     history_candidates = history_path_candidates(control_dir)
     history_rows = read_history_rows(history_candidates)
     shared_history_path = experiment_root_for_path(control_dir) / HISTORY_FILE_NAME
@@ -740,6 +759,7 @@ def main() -> int:
         history_rows=history_rows,
         history_path=history_path if history_rows else None,
         run_state=run_state,
+        failure_analysis=failure_analysis,
     )
     title = f"{args.date} {TITLE_SUFFIX}"
     report_dir = report_root / args.date

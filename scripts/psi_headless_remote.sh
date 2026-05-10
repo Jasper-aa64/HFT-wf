@@ -17,10 +17,35 @@ HEADLESS_CONTROL_DIR="$RUN_DIR"
 MEASURE_RUNS="${MEASURE_RUNS:-5}"
 
 mkdir -p "$RUN_DIR"
+mkdir -p "$RUN_DIR/logs" "$RUN_DIR/reports"
 printf "label\tmode\twarm_or_cold\telapsed_ms\telapsed_seconds\tcompat_seconds\trc\tlog_file\n" > "$RUN_DIR/timing_samples.tsv"
 
 log() {
   echo "[$(date '+%F %T')] $*" | tee -a "$RUN_DIR/summary.txt"
+}
+
+sync_log_artifacts() {
+  mkdir -p "$RUN_DIR/logs"
+  local name
+  for name in \
+    summary.txt \
+    build.log \
+    build_tail.txt \
+    current_no_compare.txt \
+    current_compare.txt \
+    report.log \
+    perf_stat.txt \
+    perf_report.txt \
+    perf_report.err \
+    perf_runner.log \
+    perf_record_runner.log \
+    hotspot_notes.txt \
+    timing_samples.tsv
+  do
+    if [ -f "$RUN_DIR/$name" ]; then
+      cp -f "$RUN_DIR/$name" "$RUN_DIR/logs/$name"
+    fi
+  done
 }
 
 set_compare() {
@@ -140,10 +165,11 @@ write_failure_state() {
   local build_status="${2:-unknown}"
   local compare_status="${3:-not_run}"
   local timing_status="${4:-not_run}"
+  local failure_mode="${5:-stop}"
   if ! command -v python3 >/dev/null 2>&1; then
     return 0
   fi
-  FAILURE_REASON="$reason" BUILD_STATUS="$build_status" COMPARE_STATUS="$compare_status" TIMING_STATUS="$timing_status" \
+  FAILURE_REASON="$reason" BUILD_STATUS="$build_status" COMPARE_STATUS="$compare_status" TIMING_STATUS="$timing_status" FAILURE_MODE="$failure_mode" \
     RUN_DIR="$RUN_DIR" RUN_ID="$RUN_ID" python3 - <<'PY'
 from __future__ import annotations
 
@@ -155,8 +181,11 @@ from pathlib import Path
 
 run_dir = Path(os.environ["RUN_DIR"])
 run_dir.mkdir(parents=True, exist_ok=True)
+for child in ("logs", "reports"):
+    (run_dir / child).mkdir(parents=True, exist_ok=True)
 now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 reason = os.environ["FAILURE_REASON"]
+continue_after = os.environ.get("FAILURE_MODE", "stop") == "continue"
 sample_policy = {
     "screening_measured_samples": 3,
     "promotion_measured_samples": 5,
@@ -230,8 +259,30 @@ ensure_tsv(
 ensure_tsv("retry_conditions.tsv", ["target", "status", "noise_flag", "retry_after", "required_condition", "last_exit_reason", "notes"])
 ensure_tsv("timing_history.tsv", ["history_key", "recorded_at", "run_id", "host_key", "control_head", "active_gate", "kind", "sample_count", "noise_flag", "verdict", "notes"])
 
+failure_analysis = {
+    "analysis_status": "recorded",
+    "recorded_at": now,
+    "run_id": os.environ.get("RUN_ID", "headless"),
+    "reason": reason,
+    "analysis_phase": "compare" if reason == "compare_failed" else "run",
+    "build_status": os.environ.get("BUILD_STATUS", "unknown"),
+    "compare_status": os.environ.get("COMPARE_STATUS", "not_run"),
+    "timing_status": os.environ.get("TIMING_STATUS", "not_run"),
+    "batch_continuation": "continue_to_next_round" if continue_after else "stopped",
+    "next_round_action": "continue" if continue_after else "stop",
+    "summary": (
+        "Compare failed; record analysis first, then continue to the next round."
+        if continue_after and reason == "compare_failed"
+        else "Failure recorded and batch stopped."
+    ),
+}
+(run_dir / "failure_analysis.json").write_text(json.dumps(failure_analysis, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+with (run_dir / "logs" / "failure_analysis.log").open("w", encoding="utf-8") as handle:
+    for key in ("analysis_status", "recorded_at", "run_id", "reason", "analysis_phase", "build_status", "compare_status", "timing_status", "batch_continuation", "next_round_action", "summary"):
+        handle.write(f"{key}={failure_analysis[key]}\n")
+
 state = {
-    "status": "stopped",
+    "status": "running" if continue_after else "stopped",
     "mode": "headless",
     "run_id": os.environ.get("RUN_ID", "headless"),
     "bundle_id": os.environ.get("RUN_ID", "headless"),
@@ -254,14 +305,19 @@ state = {
     "patch_queue_path": str(run_dir / "patch_queue.tsv"),
     "neutral_pool_path": str(run_dir / "neutral_pool.tsv"),
     "retry_conditions_path": str(run_dir / "retry_conditions.tsv"),
+    "failure_analysis_path": str(run_dir / "failure_analysis.json"),
+    "failure_analysis_status": failure_analysis["analysis_status"],
+    "failure_analysis_reason": reason,
+    "batch_continuation": failure_analysis["batch_continuation"],
+    "next_round_action": failure_analysis["next_round_action"],
 }
 (run_dir / "run_state.json").write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 heartbeat = {
     "updated_at": now,
-    "phase": "stopped",
-    "current_step": reason,
+    "phase": "analysis" if continue_after else "stopped",
+    "current_step": f"{reason}; continue_to_next_round" if continue_after else reason,
     "pid_or_session": str(os.getpid()),
-    "last_log": str(run_dir / "summary.txt"),
+    "last_log": str((run_dir / "logs" / "failure_analysis.log").resolve()),
 }
 (run_dir / "heartbeat.json").write_text(json.dumps(heartbeat, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 PY
@@ -275,7 +331,7 @@ write_headless_control_loop() {
   local control_noise="$5"
   local no_compare_count="$6"
   local compare_rc="$7"
-  mkdir -p "$HEADLESS_CONTROL_DIR"
+  mkdir -p "$HEADLESS_CONTROL_DIR" "$HEADLESS_CONTROL_DIR/logs" "$HEADLESS_CONTROL_DIR/reports"
   export HEADLESS_CONTROL_DIR CONTROL_HEAD="$control_head" CONTROL_MEDIAN_MS="$control_median_ms" \
     CONTROL_SAMPLES_MS="$control_samples_ms" CONTROL_SAMPLES_SECONDS="$control_samples_seconds" \
     CONTROL_NOISE="$control_noise" NO_COMPARE_COUNT="$no_compare_count" COMPARE_RC="$compare_rc" RUN_ID SCRIPT_DIR
@@ -388,6 +444,7 @@ control_samples_ms = [float(part) for part in os.environ.get("CONTROL_SAMPLES_MS
 control_noise = os.environ.get("CONTROL_NOISE", "ok")
 no_compare_count = os.environ.get("NO_COMPARE_COUNT", "0")
 compare_rc = os.environ.get("COMPARE_RC", "0")
+compare_pass = str(compare_rc) == "0"
 run_id = os.environ.get("RUN_ID", "headless")
 host_key = os.environ.get("PSI_TIMING_HOST_KEY") or os.environ.get("HOST_KEY") or default_host_key()
 recorded_at = now()
@@ -396,6 +453,10 @@ control_median_ms_text = control_stats["median_ms"]
 control_median_seconds = control_stats["median_seconds"]
 last_exit_reason = "compare_pass" if str(compare_rc) == "0" else "compare_failed"
 noise_status = "NOISY" if str(control_noise).upper() == "NOISY" else "ok"
+failure_analysis_path = out_dir / "failure_analysis.json"
+failure_analysis: dict[str, object] = {}
+if failure_analysis_path.exists():
+    failure_analysis = json.loads(failure_analysis_path.read_text(encoding="utf-8-sig"))
 
 profile_rows = [
     {
@@ -572,17 +633,21 @@ attempt_rows = [
         "range_ms": "",
         "range_seconds": "",
         "noise_flag": "planned",
-        "verdict": "neutral",
+        "verdict": "neutral" if compare_pass else "rejected",
         "control_head": control_head,
         "control_median_ms": control_median_ms_text,
         "control_median_seconds": control_median_seconds,
         "delta_ms": "",
         "delta_seconds": "",
         "acceptance_policy": "neutral stack retained for bundle audit; not promotion proof",
-        "evidence_status": "bundle_audit_pending",
+        "evidence_status": "bundle_audit_pending" if compare_pass else "compare_failed",
         "promotion_sample_floor": str(PROMOTION_SAMPLE_FLOOR),
         "bundle_audit_sample_floor": str(BUNDLE_AUDIT_SAMPLE_FLOOR),
-        "notes": "Safe neutral stack placeholder keeps bundle validation visible at the run root.",
+        "notes": (
+            "Safe neutral stack placeholder keeps bundle validation visible at the run root."
+            if compare_pass
+            else "Compare failed; record failure analysis and continue to the next round without neutral retention."
+        ),
     },
 ]
 attempt_fieldnames = [
@@ -672,7 +737,13 @@ patch_queue_rows = [
         "timing_summary": f"sample_count={row['sample_count']}; median_ms={row['median_ms']}; delta_ms={row['delta_ms']}; noise_flag={row['noise_flag']}",
         "semantic_risk": "low" if row["policy_bucket"] != "reserve" else "medium",
         "stack_compatibility": "stackable" if row["experiment_kind"] == "neutral_stack" else "single",
-        "queue_state": "NOISY_PENDING" if noise_status == "NOISY" else "bundle_audit_pending" if row["experiment_kind"] == "neutral_stack" else row["evidence_status"],
+        "queue_state": (
+            "NOISY_PENDING"
+            if noise_status == "NOISY"
+            else "bundle_audit_pending"
+            if compare_pass and row["experiment_kind"] == "neutral_stack"
+            else row["evidence_status"]
+        ),
         "build_status": "pass",
         "compare_status": "pass" if str(compare_rc) == "0" else "failed",
         "timing_status": "screening_only",
@@ -736,7 +807,7 @@ neutral_pool_rows = [
         "notes": "Neutral stack evidence retained; requires bundle audit before promotion.",
     }
     for row in attempt_rows
-    if row["experiment_kind"] == "neutral_stack" or row["verdict"] == "neutral"
+    if compare_pass and (row["experiment_kind"] == "neutral_stack" or row["verdict"] == "neutral")
 ]
 with (out_dir / "neutral_pool.tsv").open("w", encoding="utf-8", newline="") as handle:
     fieldnames = [
@@ -831,6 +902,11 @@ run_state = {
     "patch_queue_path": str(out_dir / "patch_queue.tsv"),
     "neutral_pool_path": str(out_dir / "neutral_pool.tsv"),
     "retry_conditions_path": str(out_dir / "retry_conditions.tsv"),
+    "failure_analysis_path": str(failure_analysis_path) if failure_analysis else "",
+    "failure_analysis_status": failure_analysis.get("analysis_status", ""),
+    "failure_analysis_reason": failure_analysis.get("reason", ""),
+    "batch_continuation": failure_analysis.get("batch_continuation", "completed"),
+    "next_round_action": failure_analysis.get("next_round_action", ""),
 }
 with (out_dir / "run_state.json").open("w", encoding="utf-8") as handle:
     json.dump(run_state, handle, indent=2, ensure_ascii=False)
@@ -859,6 +935,7 @@ if [ -f "$ENV_FILE" ]; then
 else
   log "ERROR missing env file: $ENV_FILE"
   write_failure_state "missing_env_file" "not_run" "not_run" "not_run"
+  sync_log_artifacts
   exit 1
 fi
 
@@ -874,6 +951,7 @@ done
 if pgrep -f "$RUNNER" >/dev/null 2>&1; then
   log "ERROR existing PsiTraderRunner still running after wait"
   write_failure_state "runner_busy" "not_run" "not_run" "not_run"
+  sync_log_artifacts
   exit 1
 fi
 
@@ -885,6 +963,7 @@ if ! (cd "$ROOT" && cmake --build "$BUILD_DIR" -j2 > "$RUN_DIR/build.log" 2>&1);
   log "ERROR build failed"
   tail -80 "$RUN_DIR/build.log" > "$RUN_DIR/build_tail.txt"
   write_failure_state "build_failed" "failed" "not_run" "not_run"
+  sync_log_artifacts
   exit 1
 fi
 log "build passed"
@@ -904,6 +983,7 @@ for label in warmup "${measured_labels[@]}"; do
   if ! run_runner "$label" "$RUN_DIR/$label.no_compare.log" "no_compare" "$warm_or_cold"; then
     log "ERROR no_compare failed at $label"
     write_failure_state "timing_failed" "pass" "not_run" "failed"
+    sync_log_artifacts
     exit 1
   fi
   cat "$RUN_DIR/$label.result" >> "$RUN_DIR/current_no_compare.txt"
@@ -938,9 +1018,8 @@ set_compare false
 } | tee "$RUN_DIR/current_compare.txt"
 
 if [ "$compare_rc" -ne 0 ]; then
-  log "ERROR compare failed"
-  write_failure_state "compare_failed" "pass" "failed" "screening_only"
-  exit "$compare_rc"
+  log "WARN compare failed; recording failure analysis and continuing to the next round"
+  write_failure_state "compare_failed" "pass" "failed" "screening_only" "continue"
 fi
 
 control_head="${CONTROL_HEAD:-}"
@@ -1023,3 +1102,4 @@ fi
 
 log "done"
 log "run_dir=$RUN_DIR"
+sync_log_artifacts
