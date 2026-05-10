@@ -796,6 +796,48 @@ history_rows = history_rows_from_attempt_rows(
     default_noise_flag=control_stats["noise_flag"],
 )
 write_history_artifacts(shared_history_out, per_run_history_out, history_rows)
+comparison_summary_path = out_dir / "comparison_summary.json"
+accepted_attempt_rows = [row for row in attempt_rows if row.get("verdict") == "accepted"]
+candidate_history_rows = [row for row in history_rows if row.get("kind") != "control"]
+accepted_history_rows = [row for row in candidate_history_rows if row.get("verdict") == "accepted"]
+comparison_summary = {
+    "schema": "psi_headless_comparison_summary_v1",
+    "run_id": run_id,
+    "recorded_at": recorded_at,
+    "host_key": host_key,
+    "control_head": control_head,
+    "active_gate": "headless remote batch",
+    "compare_rc": int(compare_rc) if str(compare_rc).isdigit() else compare_rc,
+    "compare_result": "pass" if compare_pass else "failed",
+    "decision": "accepted" if accepted_attempt_rows else "screening_only",
+    "accepted": bool(accepted_attempt_rows),
+    "accepted_attempt_count": len(accepted_attempt_rows),
+    "candidate_history_count": len(candidate_history_rows),
+    "accepted_history_count": len(accepted_history_rows),
+    "control": {
+        "sample_count": control_stats["sample_count"],
+        "samples_ms": control_stats["samples_ms"],
+        "median_ms": control_stats["median_ms"],
+        "median_seconds": control_stats["median_seconds"],
+        "stdev_ms": control_stats["stdev_ms"],
+        "range_ms": control_stats["range_ms"],
+        "noise_flag": control_stats["noise_flag"],
+    },
+    "artifact_paths": {
+        "attempts": str(out_dir / "attempts.tsv"),
+        "patch_queue": str(out_dir / "patch_queue.tsv"),
+        "neutral_pool": str(out_dir / "neutral_pool.tsv"),
+        "retry_conditions": str(out_dir / "retry_conditions.tsv"),
+        "timing_history": str(shared_history_out),
+        "timing_history_run_copy": str(per_run_history_out),
+        "failure_analysis": str(failure_analysis_path) if failure_analysis else "",
+    },
+    "notes": (
+        "Accepted decisions require compare pass plus same-harness candidate timing history; "
+        "this summary is screening-only unless accepted=true and accepted_history_count is nonzero."
+    ),
+}
+comparison_summary_path.write_text(json.dumps(comparison_summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 run_state = {
     "status": run_status,
@@ -826,6 +868,7 @@ run_state = {
     "build_status": "pass",
     "compare_status": "pass" if str(compare_rc) == "0" else "failed",
     "timing_status": "screening_only",
+    "comparison_summary_path": str(comparison_summary_path),
     "patch_queue_path": str(out_dir / "patch_queue.tsv"),
     "neutral_pool_path": str(out_dir / "neutral_pool.tsv"),
     "retry_conditions_path": str(out_dir / "retry_conditions.tsv"),
