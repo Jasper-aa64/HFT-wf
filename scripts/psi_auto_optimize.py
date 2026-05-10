@@ -35,11 +35,15 @@ from psi_timing_history import (
 )
 
 
-REPORT_ROOT = Path("C:/Users/liangjunming/Desktop/work/\u65e5\u62a5\uff08\u4e2d\u6587\uff09")
 TITLE_SUFFIX = "\u6027\u80fd\u4f18\u5316\u62a5\u544a"
 EPSILON_ABS_SECONDS = 1.0
 EPSILON_SIGMA_MULTIPLIER = 2.0
-MIN_CONVERGENCE_SAMPLES = 4
+# Attempt-level deltas required before the loop may claim convergence_proven.
+# Per-candidate promotion still needs its own repeated timing samples.
+MIN_CONVERGENCE_SAMPLES = 5
+PROMOTION_SAMPLE_FLOOR = 5
+BUNDLE_AUDIT_SAMPLE_FLOOR = 7
+SCREENING_SAMPLE_FLOOR = 3
 NOISE_RANGE_THRESHOLD = 5.0
 NOISE_STDEV_THRESHOLD = 1.5
 NOISE_CV_THRESHOLD = 0.03
@@ -48,12 +52,26 @@ STOP_REASONS = {
     "plateau",
     "lane_cooldown_budget",
     "NOISY",
+    "NOISY_PENDING",
     "bundle_regression",
     "budget_stop",
     "no_targets",
     "correctness_failed",
     "remote_failed",
 }
+SAMPLE_POLICY = {
+    "screening_measured_samples": SCREENING_SAMPLE_FLOOR,
+    "promotion_measured_samples": PROMOTION_SAMPLE_FLOOR,
+    "bundle_audit_measured_samples": BUNDLE_AUDIT_SAMPLE_FLOOR,
+    "screening_policy": "1 warmup + 3 measured is diagnostic screening only",
+    "promotion_policy": "same-harness control and candidate evidence with compare pass",
+    "bundle_policy": "neutral stacks need bundle audit before promotion",
+}
+
+
+def safe_token(text: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in text.strip())
+    return cleaned.strip("_") or "candidate"
 
 
 @dataclass(frozen=True)
@@ -195,7 +213,7 @@ def classify_stop(
         consecutive_no_accepted += 1
 
     if any(is_noisy(attempt.control_samples, attempt.candidate_samples) for attempt in relevant):
-        reason = "NOISY"
+        reason = "NOISY_PENDING"
         noise_status = "NOISY"
     elif len(deltas) >= min_samples and ucb95 is not None and ucb95 <= epsilon:
         reason = "convergence_proven"
@@ -292,7 +310,13 @@ def evidence_score(total_ms: int, p_owned: float, p_safe: float, p_gate: float, 
     return expected_delta_seconds * p_owned * p_safe * p_gate * p_local / cost_attempt_seconds + 0.05 * uncertainty
 
 
+def timing_summary_text(sample_count: object, median_ms: object, delta_ms: object, noise_flag: str) -> str:
+    return f"sample_count={sample_count}; median_ms={median_ms}; delta_ms={delta_ms}; noise_flag={noise_flag}"
+
+
 def write_hotspots(run_dir: Path) -> None:
+    row_loop_score = f"{evidence_score(65200, 0.9, 0.84, 0.92, 1.0, 0.1):.6f}"
+    write_table_score = f"{evidence_score(28400, 0.82, 0.96, 0.92, 0.98, 0.1):.6f}"
     rows = [
         {
             "rank": 1,
@@ -308,7 +332,8 @@ def write_hotspots(run_dir: Path) -> None:
             "cost_attempt_seconds": "1800.0",
             "uncertainty": "0.100",
             "lambda": "0.050",
-            "score_evidence": f"{evidence_score(65200, 0.9, 0.84, 0.92, 1.0, 0.1):.6f}",
+            "score_evidence": row_loop_score,
+            "score": row_loop_score,
             "notes": "synthetic expected-value evidence lane row",
         },
         {
@@ -325,7 +350,8 @@ def write_hotspots(run_dir: Path) -> None:
             "cost_attempt_seconds": "1800.0",
             "uncertainty": "0.100",
             "lambda": "0.050",
-            "score_evidence": f"{evidence_score(28400, 0.82, 0.96, 0.92, 0.98, 0.1):.6f}",
+            "score_evidence": write_table_score,
+            "score": write_table_score,
             "notes": "synthetic expected-value evidence lane row",
         },
     ]
@@ -347,6 +373,7 @@ def write_hotspots(run_dir: Path) -> None:
             "uncertainty",
             "lambda",
             "score_evidence",
+            "score",
             "notes",
         ],
     )
@@ -361,8 +388,19 @@ def write_attempts(run_dir: Path, attempts: list[Attempt], control_head: str) ->
             "rank": 0,
             "kind": "control",
             "policy_bucket": "control",
+            "experiment_kind": "control_bundle",
             "lane": "control",
             "target": f"{control_head} control baseline",
+            "stack_members": "",
+            "candidate_id": "control",
+            "patch_path": "",
+            "touched_files": "",
+            "hypothesis": "diagnostic baseline for the current run",
+            "compare_result": "control",
+            "timing_summary": timing_summary_text(control["sample_count"], control["median_ms"], "0.000", "ok"),
+            "semantic_risk": "none",
+            "stack_compatibility": "baseline",
+            "retry_condition": "",
             "sample_unit": "seconds_compat",
             "warm_or_cold": "measured",
             "samples_ms": control["samples_ms"],
@@ -386,6 +424,10 @@ def write_attempts(run_dir: Path, attempts: list[Attempt], control_head: str) ->
             "correctness": "pass",
             "noise_flag": "ok",
             "stop_reason": "",
+            "acceptance_policy": "diagnostic baseline; not promotion proof",
+            "evidence_status": "screening_only",
+            "promotion_sample_floor": PROMOTION_SAMPLE_FLOOR,
+            "bundle_audit_sample_floor": BUNDLE_AUDIT_SAMPLE_FLOOR,
             "notes": "Synthetic local control baseline; not performance authority.",
         }
     )
@@ -394,13 +436,33 @@ def write_attempts(run_dir: Path, attempts: list[Attempt], control_head: str) ->
         control_median = statistics.median(attempt.control_samples)
         candidate_median = statistics.median(attempt.candidate_samples)
         noisy = is_noisy(attempt.control_samples, attempt.candidate_samples)
+        compare_result = "pass" if attempt.correctness == "pass" else "failed"
+        candidate_id = f"{attempt.rank:02d}_{safe_token(attempt.target)}"
+        patch_path = f"patches/{attempt.rank:02d}_{safe_token(attempt.lane)}.patch"
+        timing_summary = timing_summary_text(
+            stats["sample_count"],
+            stats["median_ms"],
+            f"{delta_i(control_median, candidate_median) * 1000.0:.3f}",
+            "NOISY" if noisy else "ok",
+        )
         rows.append(
             {
                 "rank": attempt.rank,
                 "kind": "candidate",
                 "policy_bucket": attempt.lane,
+                "experiment_kind": "neutral_stack" if attempt.lane == "combination" else "single",
                 "lane": attempt.lane,
                 "target": attempt.target,
+                "stack_members": attempt.target if attempt.lane != "combination" else "handlerData.row_loop|timestamp cache locality",
+                "candidate_id": candidate_id,
+                "patch_path": patch_path,
+                "touched_files": attempt.target if attempt.lane != "combination" else "handlerData.row_loop|timestamp cache locality",
+                "hypothesis": attempt.notes,
+                "compare_result": compare_result,
+                "timing_summary": timing_summary,
+                "semantic_risk": "low" if attempt.verdict != "rejected" else "medium",
+                "stack_compatibility": "stackable" if attempt.lane == "combination" else "single",
+                "retry_condition": "rerun when same-host jitter is below threshold" if noisy else "bundle audit required" if attempt.lane == "combination" else "eligible for stronger evidence run",
                 "sample_unit": "seconds_compat",
                 "warm_or_cold": "measured",
                 "samples_ms": stats["samples_ms"],
@@ -424,6 +486,10 @@ def write_attempts(run_dir: Path, attempts: list[Attempt], control_head: str) ->
                 "correctness": attempt.correctness,
                 "noise_flag": "NOISY" if noisy else "ok",
                 "stop_reason": attempt.stop_reason,
+                "acceptance_policy": "compare pass plus same-harness timing; 3 measured samples are screening only",
+                "evidence_status": "NOISY_PENDING" if noisy else "neutral_pool_candidate" if attempt.verdict == "neutral" else attempt.verdict,
+                "promotion_sample_floor": PROMOTION_SAMPLE_FLOOR,
+                "bundle_audit_sample_floor": BUNDLE_AUDIT_SAMPLE_FLOOR,
                 "notes": attempt.notes,
             }
         )
@@ -434,8 +500,19 @@ def write_attempts(run_dir: Path, attempts: list[Attempt], control_head: str) ->
             "rank",
             "kind",
             "policy_bucket",
+            "experiment_kind",
             "lane",
             "target",
+            "stack_members",
+            "candidate_id",
+            "patch_path",
+            "touched_files",
+            "hypothesis",
+            "compare_result",
+            "timing_summary",
+            "semantic_risk",
+            "stack_compatibility",
+            "retry_condition",
             "sample_unit",
             "warm_or_cold",
             "samples_ms",
@@ -459,6 +536,10 @@ def write_attempts(run_dir: Path, attempts: list[Attempt], control_head: str) ->
             "correctness",
             "noise_flag",
             "stop_reason",
+            "acceptance_policy",
+            "evidence_status",
+            "promotion_sample_floor",
+            "bundle_audit_sample_floor",
             "notes",
         ],
     )
@@ -492,19 +573,163 @@ def write_cooldown(run_dir: Path) -> None:
     write_tsv(run_dir / "cooldown.tsv", rows, ["target", "status", "cooldown_runs_remaining", "reason", "notes"])
 
 
+def write_patch_queue(run_dir: Path, attempt_rows: list[dict[str, object]]) -> None:
+    rows: list[dict[str, object]] = []
+    for row in attempt_rows:
+        if row.get("kind") == "control":
+            continue
+        sample_count = int(row.get("sample_count") or 0)
+        verdict = str(row.get("verdict") or "")
+        noisy = str(row.get("noise_flag") or "").upper() == "NOISY"
+        experiment_kind = str(row.get("experiment_kind") or "single")
+        required_samples = BUNDLE_AUDIT_SAMPLE_FLOOR if experiment_kind == "neutral_stack" else PROMOTION_SAMPLE_FLOOR
+        rows.append(
+            {
+                "rank": row.get("rank", ""),
+                "candidate_id": row.get("candidate_id", ""),
+                "target": row.get("target", ""),
+                "patch_path": row.get("patch_path", ""),
+                "policy_bucket": row.get("policy_bucket", ""),
+                "experiment_kind": experiment_kind,
+                "stack_members": row.get("stack_members", ""),
+                "touched_files": row.get("touched_files", ""),
+                "hypothesis": row.get("hypothesis", ""),
+                "compare_result": row.get("compare_result", ""),
+                "timing_summary": row.get("timing_summary", ""),
+                "semantic_risk": row.get("semantic_risk", ""),
+                "stack_compatibility": row.get("stack_compatibility", ""),
+                "queue_state": (
+                    "NOISY_PENDING"
+                    if noisy
+                    else "bundle_audit_pending"
+                    if experiment_kind == "neutral_stack"
+                    else "neutral_pool"
+                    if verdict == "neutral"
+                    else "review"
+                ),
+                "build_status": "dry_run",
+                "compare_status": "pass" if row.get("compare_result") == "pass" else "failed",
+                "timing_status": "screening_only",
+                "measured_samples": sample_count,
+                "required_samples": required_samples,
+                "retry_condition": row.get("retry_condition", "rerun when same-host jitter is below threshold" if noisy else "bundle audit required" if experiment_kind == "neutral_stack" else "eligible for stronger evidence run"),
+                "cooldown_status": "hold" if noisy else "open",
+                "notes": row.get("notes", ""),
+            }
+        )
+    write_tsv(
+        run_dir / "patch_queue.tsv",
+        rows,
+        [
+            "rank",
+            "candidate_id",
+            "target",
+            "patch_path",
+            "policy_bucket",
+            "experiment_kind",
+            "stack_members",
+            "touched_files",
+            "hypothesis",
+            "compare_result",
+            "timing_summary",
+            "semantic_risk",
+            "stack_compatibility",
+            "queue_state",
+            "build_status",
+            "compare_status",
+            "timing_status",
+            "measured_samples",
+            "required_samples",
+            "retry_condition",
+            "cooldown_status",
+            "notes",
+        ],
+    )
+
+
 def write_neutral_pool(run_dir: Path, attempts: list[Attempt]) -> None:
     rows = [
         {
+            "candidate_id": f"{attempt.rank:02d}_{safe_token(attempt.target)}",
             "target": attempt.target,
             "lane": attempt.lane,
+            "patch_path": f"patches/{attempt.rank:02d}_{safe_token(attempt.lane)}.patch",
+            "touched_files": attempt.target if attempt.lane != "combination" else "handlerData.row_loop|timestamp cache locality",
+            "hypothesis": attempt.notes,
+            "experiment_kind": "neutral_stack" if attempt.lane == "combination" else "single",
+            "stack_members": attempt.target if attempt.lane != "combination" else "handlerData.row_loop|timestamp cache locality",
             "correctness": attempt.correctness,
-            "aggregate_gain_seconds": "0.000",
-            "notes": "eligible for future stack only after remote compare evidence",
+            "compare_result": attempt.correctness,
+            "sample_count": len(attempt.candidate_samples),
+            "promotion_sample_floor": PROMOTION_SAMPLE_FLOOR,
+            "bundle_audit_sample_floor": BUNDLE_AUDIT_SAMPLE_FLOOR,
+            "aggregate_gain_seconds": f"{delta_i(statistics.median(attempt.control_samples), statistics.median(attempt.candidate_samples)):.3f}",
+            "timing_summary": timing_summary_text(
+                len(attempt.candidate_samples),
+                f"{statistics.median(attempt.candidate_samples) * 1000.0:.3f}",
+                f"{delta_i(statistics.median(attempt.control_samples), statistics.median(attempt.candidate_samples)) * 1000.0:.3f}",
+                "NOISY" if is_noisy(attempt.control_samples, attempt.candidate_samples) else "ok",
+            ),
+            "semantic_risk": "low" if attempt.verdict != "rejected" else "medium",
+            "stack_compatibility": "stackable" if attempt.lane == "combination" else "single",
+            "validation_status": "bundle_audit_pending" if attempt.lane == "combination" else "stackable",
+            "retry_condition": "rerun when same-host jitter is below threshold" if is_noisy(attempt.control_samples, attempt.candidate_samples) else "bundle audit required" if attempt.lane == "combination" else "eligible for stronger evidence run",
+            "notes": "safe neutral evidence retained; promotion still requires stronger same-harness samples",
         }
         for attempt in attempts
         if attempt.verdict == "neutral"
     ]
-    write_tsv(run_dir / "neutral_pool.tsv", rows, ["target", "lane", "correctness", "aggregate_gain_seconds", "notes"])
+    write_tsv(
+        run_dir / "neutral_pool.tsv",
+        rows,
+        [
+            "candidate_id",
+            "target",
+            "lane",
+            "patch_path",
+            "touched_files",
+            "hypothesis",
+            "experiment_kind",
+            "stack_members",
+            "correctness",
+            "compare_result",
+            "sample_count",
+            "promotion_sample_floor",
+            "bundle_audit_sample_floor",
+            "aggregate_gain_seconds",
+            "timing_summary",
+            "semantic_risk",
+            "stack_compatibility",
+            "validation_status",
+            "retry_condition",
+            "notes",
+        ],
+    )
+
+
+def write_retry_conditions(run_dir: Path, attempts: list[Attempt], metrics: dict[str, object] | None = None) -> None:
+    rows: list[dict[str, object]] = []
+    for attempt in attempts:
+        noisy = is_noisy(attempt.control_samples, attempt.candidate_samples)
+        rows.append(
+            {
+                "target": attempt.target,
+                "status": "NOISY_PENDING" if noisy else "ready_for_evidence",
+                "noise_flag": "NOISY" if noisy else "ok",
+                "retry_after": "next quiet same-host window" if noisy else "after candidate patch is prepared",
+                "required_condition": (
+                    f"collect >= {PROMOTION_SAMPLE_FLOOR} measured control and candidate samples; "
+                    f">= {BUNDLE_AUDIT_SAMPLE_FLOOR} for neutral-stack bundle audit"
+                ),
+                "last_exit_reason": "" if metrics is None else metrics.get("last_exit_reason", ""),
+                "notes": "NOISY pauses judgment; retry does not imply rejection.",
+            }
+        )
+    write_tsv(
+        run_dir / "retry_conditions.tsv",
+        rows,
+        ["target", "status", "noise_flag", "retry_after", "required_condition", "last_exit_reason", "notes"],
+    )
 
 
 def write_logs_and_patches(run_dir: Path) -> None:
@@ -628,9 +853,9 @@ def update_heartbeat(run_dir: Path, phase: str, current_step: str) -> None:
     )
 
 
-def report_paths(report_date: str) -> tuple[Path, Path]:
+def report_paths(run_dir: Path, report_date: str) -> tuple[Path, Path]:
     title = f"{report_date} {TITLE_SUFFIX}"
-    report_dir = REPORT_ROOT / report_date
+    report_dir = run_dir / "reports" / report_date
     return report_dir / f"{title}.md", report_dir / f"{title}.pdf"
 
 
@@ -651,13 +876,7 @@ def generate_report(run_dir: Path, report_date: str) -> tuple[Path, Path]:
         str(run_dir / "charts" / "convergence_decision.png"),
     ]
     subprocess.run(command, cwd=repo_root(), check=True)
-    md_path, pdf_path = report_paths(report_date)
-    reports_dir = run_dir / "reports"
-    reports_dir.mkdir(parents=True, exist_ok=True)
-    if md_path.exists():
-        (reports_dir / md_path.name).write_bytes(md_path.read_bytes())
-    if pdf_path.exists():
-        (reports_dir / pdf_path.name).write_bytes(pdf_path.read_bytes())
+    md_path, pdf_path = report_paths(run_dir, report_date)
     return md_path, pdf_path
 
 
@@ -692,6 +911,13 @@ def run_dry_contract_v1(args: argparse.Namespace) -> int:
         "last_exit_reason": None,
         "latest_report": None,
         "dry_run": True,
+        "build_status": "dry_run",
+        "compare_status": "simulated_pass",
+        "timing_status": "screening_only",
+        "sample_policy": SAMPLE_POLICY,
+        "patch_queue_path": str(run_dir / "patch_queue.tsv"),
+        "neutral_pool_path": str(run_dir / "neutral_pool.tsv"),
+        "retry_conditions_path": str(run_dir / "retry_conditions.tsv"),
     }
     write_json(run_dir / "run_state.json", state)
     update_heartbeat(run_dir, "init", "artifact tree initialized")
@@ -721,6 +947,7 @@ def run_dry_contract_v1(args: argparse.Namespace) -> int:
         ]
 
     attempt_rows = write_attempts(run_dir, attempts, "synthetic-local-control")
+    write_patch_queue(run_dir, attempt_rows)
     write_cooldown(run_dir)
     write_neutral_pool(run_dir, attempts)
     write_logs_and_patches(run_dir)
@@ -744,6 +971,7 @@ def run_dry_contract_v1(args: argparse.Namespace) -> int:
     write_history_artifacts(shared_history_path, per_run_history_out, timing_history_rows)
 
     metrics = classify_stop(attempts, stall_limit=args.stall_limit, max_iterations=args.max_iterations)
+    write_retry_conditions(run_dir, attempts, metrics)
     write_charts(run_dir, attempts, metrics)
     update_heartbeat(run_dir, "charts", "runtime_convergence and convergence_decision written")
 
@@ -763,6 +991,13 @@ def run_dry_contract_v1(args: argparse.Namespace) -> int:
             "supported_stop_reasons": metrics["supported_stop_reasons"],
             "timing_history_path": str(shared_history_path),
             "timing_history_run_copy": str(per_run_history_out),
+            "build_status": "dry_run",
+            "compare_status": "simulated_pass",
+            "timing_status": "screening_only",
+            "sample_policy": SAMPLE_POLICY,
+            "patch_queue_path": str(run_dir / "patch_queue.tsv"),
+            "neutral_pool_path": str(run_dir / "neutral_pool.tsv"),
+            "retry_conditions_path": str(run_dir / "retry_conditions.tsv"),
         }
     )
     write_json(run_dir / "run_state.json", state)
@@ -797,8 +1032,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> int:
-    args = build_parser().parse_args()
+def auto_loop(args: argparse.Namespace) -> int:
     if not args.dry_run:
         raise SystemExit("Only --dry-run is implemented for local contract-v1 validation; remote execution is out of scope.")
     start = time.monotonic()
@@ -811,6 +1045,11 @@ def main() -> int:
         state["updated_at"] = utc_now()
         write_json(state_path, state)
     return result
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    return auto_loop(args)
 
 
 if __name__ == "__main__":

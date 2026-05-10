@@ -12,13 +12,13 @@ from pathlib import Path
 def read_json(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
 def read_tsv(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
-    with path.open("r", encoding="utf-8", newline="") as handle:
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
         return list(csv.DictReader(handle, delimiter="\t"))
 
 
@@ -65,6 +65,16 @@ def latest_timing(attempts: list[dict[str, str]]) -> dict[str, str]:
     return {"median_ms": "", "median_seconds": "", "samples_ms": "", "samples": "", "delta_ms": "", "delta_seconds": ""}
 
 
+def count_rows(rows: list[dict[str, str]], column: str, value: str) -> int:
+    return sum(1 for row in rows if (row.get(column) or "").strip() == value)
+
+
+def latest_queue_state(rows: list[dict[str, str]]) -> str:
+    if not rows:
+        return ""
+    return rows[-1].get("queue_state", "")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Show Psi automatic optimization run status.")
     parser.add_argument("--run-dir", type=Path, required=True)
@@ -77,6 +87,9 @@ def main() -> int:
     state = read_json(run_dir / "run_state.json")
     heartbeat = read_json(run_dir / "heartbeat.json")
     attempts = read_tsv(run_dir / "attempts.tsv")
+    patch_queue = read_tsv(run_dir / "patch_queue.tsv")
+    neutral_pool = read_tsv(run_dir / "neutral_pool.tsv")
+    retry_conditions = read_tsv(run_dir / "retry_conditions.tsv")
     counts = count_verdicts(attempts)
 
     latest_report = state.get("latest_report") or ""
@@ -103,11 +116,24 @@ def main() -> int:
     print("delta_convention=control_minus_candidate_positive_is_faster")
     print(f"latest_delta_ms={timing['delta_ms']}")
     print(f"latest_delta_seconds={timing['delta_seconds']}")
+    print(f"build_status={state.get('build_status', 'unknown')}")
+    print(f"compare_status={state.get('compare_status', 'unknown')}")
+    print(f"timing_status={state.get('timing_status', 'unknown')}")
     print(f"accepted={state.get('accepted_count', counts['accepted'])}")
     print(f"neutral={state.get('neutral_count', counts['neutral'])}")
     print(f"rejected={state.get('rejected_count', counts['rejected'])}")
     print(f"noise_status={state.get('noise_status', 'unknown')}")
     print(f"last_exit_reason={state.get('last_exit_reason', '')}")
+    sample_policy = state.get("sample_policy") if isinstance(state.get("sample_policy"), dict) else {}
+    print(f"screening_measured_samples={sample_policy.get('screening_measured_samples', '')}")
+    print(f"promotion_measured_samples={sample_policy.get('promotion_measured_samples', '')}")
+    print(f"bundle_audit_measured_samples={sample_policy.get('bundle_audit_measured_samples', '')}")
+    print(f"patch_queue_count={len(patch_queue)}")
+    print(f"patch_queue_latest_state={latest_queue_state(patch_queue)}")
+    print(f"neutral_pool_count={len(neutral_pool)}")
+    print(f"neutral_stack_pending={count_rows(neutral_pool, 'validation_status', 'bundle_audit_pending')}")
+    print(f"retry_conditions_count={len(retry_conditions)}")
+    print(f"noisy_pending_count={count_rows(retry_conditions, 'status', 'NOISY_PENDING') + count_rows(patch_queue, 'queue_state', 'NOISY_PENDING')}")
     print(f"latest_report_path={latest_report}")
     print(f"latest_report={latest_report}")
     return 0

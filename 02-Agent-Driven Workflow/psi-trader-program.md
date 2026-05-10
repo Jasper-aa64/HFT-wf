@@ -28,12 +28,12 @@ Control-loop policy:
 
 ```text
 Current control baseline: recorded in the remote control bundle and mirrored
-  locally in the control-loop artifacts for the active run.
+  locally in the active run artifacts.
 Formal control-loop artifacts:
-  experiments/<run-id>/control_loop/profile.tsv
-  experiments/<run-id>/control_loop/hotspots.tsv
-  experiments/<run-id>/control_loop/attempts.tsv
-  experiments/<run-id>/control_loop/cooldown.tsv
+  <run-root>/profile.tsv
+  <run-root>/hotspots.tsv
+  <run-root>/attempts.tsv
+  <run-root>/cooldown.tsv
 Recorder: scripts/psi_control_loop.py
 Profile runs: DIAGNOSTIC_ONLY, not PASS/FAIL_PERF
 Selection policy: three lanes: evidence + insight + combination; not greedy-only hotspot picking
@@ -262,20 +262,20 @@ Report generation:
 ```powershell
 python scripts\psi_daily_report.py `
   --date <YYYY-MM-DD> `
-  --control-loop-dir experiments\<run-id> `
-  --run-state experiments\<run-id>\run_state.json `
-  --image experiments\<run-id>\charts\runtime_convergence.png `
-  --image experiments\<run-id>\charts\convergence_decision.png
+  --control-loop-dir <run-root> `
+  --run-state <run-root>\run_state.json `
+  --image <run-root>\charts\runtime_convergence.png `
+  --image <run-root>\charts\convergence_decision.png
 ```
 
-The report script writes performance optimization reports only. The parent
-`日报（中文）\<date>` directory is the user's dated workspace, not a daily-report
-classification for the generated document. The script writes only Markdown and
-PDF to:
+The report script writes performance optimization reports only. The default
+location is the selected run artifact's `reports/<date>` directory; a dated
+workspace is only used when `--report-root` is passed explicitly. The script
+writes only Markdown and PDF to:
 
 ```text
-C:\Users\liangjunming\Desktop\work\日报（中文）\<date>\<date> 性能优化报告.md
-C:\Users\liangjunming\Desktop\work\日报（中文）\<date>\<date> 性能优化报告.pdf
+<run-root>/reports/<date>/<date> 性能优化报告.md
+<run-root>/reports/<date>/<date> 性能优化报告.pdf
 ```
 
 Do not name the file `report.*`, and do not call the document a daily report in

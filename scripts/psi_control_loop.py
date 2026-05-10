@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import statistics
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +26,7 @@ from psi_timing_history import (
     bundle_id_for_path,
     default_host_key,
     history_rows_from_attempt_rows,
+    sample_statistics_from_ms,
     per_run_history_path,
     shared_history_path_for_output,
     write_history_artifacts,
@@ -320,6 +320,10 @@ def sample_stats(
             "mean_seconds": "",
             "median_ms": "",
             "median_seconds": "",
+            "mad_ms": "",
+            "mad_seconds": "",
+            "iqr_ms": "",
+            "iqr_seconds": "",
             "stdev_ms": "",
             "stdev_seconds": "",
             "range_ms": "",
@@ -329,28 +333,27 @@ def sample_stats(
 
     samples_seconds = samples if sample_unit == "seconds" else [sample / 1000.0 for sample in samples]
     samples_ms = [sample * 1000.0 for sample in samples_seconds]
-    mean_seconds = statistics.mean(samples_seconds)
-    median_seconds = statistics.median(samples_seconds)
-    stdev_seconds = statistics.stdev(samples_seconds) if len(samples_seconds) > 1 else 0.0
-    range_seconds = max(samples_seconds) - min(samples_seconds)
-    mean_ms = statistics.mean(samples_ms)
-    median_ms = statistics.median(samples_ms)
-    stdev_ms = statistics.stdev(samples_ms) if len(samples_ms) > 1 else 0.0
-    range_ms = max(samples_ms) - min(samples_ms)
+    stats_ms = sample_statistics_from_ms(samples_ms)
+    stdev_seconds = float(stats_ms["stdev_seconds"])
+    range_seconds = float(stats_ms["range_seconds"])
     noisy = range_seconds >= range_threshold or stdev_seconds >= stdev_threshold
 
     return {
-        "sample_count": str(len(samples)),
-        "samples_ms": ",".join(f"{sample:g}" for sample in samples_ms),
-        "samples": ",".join(f"{sample:g}" for sample in samples_seconds),
-        "mean_ms": f"{mean_ms:.3f}",
-        "mean_seconds": f"{mean_seconds:.3f}",
-        "median_ms": f"{median_ms:.3f}",
-        "median_seconds": f"{median_seconds:.3f}",
-        "stdev_ms": f"{stdev_ms:.3f}",
-        "stdev_seconds": f"{stdev_seconds:.3f}",
-        "range_ms": f"{range_ms:.3f}",
-        "range_seconds": f"{range_seconds:.3f}",
+        "sample_count": stats_ms["sample_count"],
+        "samples_ms": stats_ms["samples_ms"],
+        "samples": stats_ms["samples"],
+        "mean_ms": stats_ms["mean_ms"],
+        "mean_seconds": stats_ms["mean_seconds"],
+        "median_ms": stats_ms["median_ms"],
+        "median_seconds": stats_ms["median_seconds"],
+        "mad_ms": stats_ms["mad_ms"],
+        "mad_seconds": stats_ms["mad_seconds"],
+        "iqr_ms": stats_ms["iqr_ms"],
+        "iqr_seconds": stats_ms["iqr_seconds"],
+        "stdev_ms": stats_ms["stdev_ms"],
+        "stdev_seconds": stats_ms["stdev_seconds"],
+        "range_ms": stats_ms["range_ms"],
+        "range_seconds": stats_ms["range_seconds"],
         "noise_flag": "noisy" if noisy else "ok",
     }
 
@@ -593,6 +596,10 @@ def target_rows(profile_rows: list[dict[str, str]]) -> list[dict[str, str]]:
     return selected
 
 
+def profile_to_candidates(profile_rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    return target_rows(profile_rows)
+
+
 def build_explore_stack(targets: list[dict[str, str]]) -> dict[str, str] | None:
     safe_targets = [
         row
@@ -640,7 +647,7 @@ def build_attempts(
     range_threshold: float,
     stdev_threshold: float,
 ) -> list[dict[str, str]]:
-    candidates = target_rows(profile_rows)
+    candidates = profile_to_candidates(profile_rows)
     exploit_rows = candidates[:2]
     reserve_rows = candidates[2:]
     stack_row = build_explore_stack(candidates)
@@ -679,6 +686,10 @@ def build_attempts(
             "mean_seconds": control_stats["mean_seconds"],
             "median_ms": control_stats["median_ms"],
             "median_seconds": control_stats["median_seconds"],
+            "mad_ms": control_stats["mad_ms"],
+            "mad_seconds": control_stats["mad_seconds"],
+            "iqr_ms": control_stats["iqr_ms"],
+            "iqr_seconds": control_stats["iqr_seconds"],
             "stdev_ms": control_stats["stdev_ms"],
             "stdev_seconds": control_stats["stdev_seconds"],
             "range_ms": control_stats["range_ms"],
@@ -729,6 +740,10 @@ def build_attempts(
                 "mean_seconds": "",
                 "median_ms": "",
                 "median_seconds": "",
+                "mad_ms": "",
+                "mad_seconds": "",
+                "iqr_ms": "",
+                "iqr_seconds": "",
                 "stdev_ms": "",
                 "stdev_seconds": "",
                 "range_ms": "",
@@ -881,6 +896,10 @@ def write_attempts(attempts_path: Path, rows: list[dict[str, str]]) -> None:
         "mean_seconds",
         "median_ms",
         "median_seconds",
+        "mad_ms",
+        "mad_seconds",
+        "iqr_ms",
+        "iqr_seconds",
         "stdev_ms",
         "stdev_seconds",
         "range_ms",

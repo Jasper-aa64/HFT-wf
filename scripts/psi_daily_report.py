@@ -30,7 +30,6 @@ from psi_timing_history import (
 
 
 DEFAULT_CONTROL_LOOP = Path("experiments/psi-remote-linux-20260508/control_loop")
-DEFAULT_REPORT_ROOT = Path("C:/Users/liangjunming/Desktop/work/\u65e5\u62a5\uff08\u4e2d\u6587\uff09")
 HISTORY_FILE_NAME = "timing_history.tsv"
 
 TITLE_SUFFIX = "\u6027\u80fd\u4f18\u5316\u62a5\u544a"
@@ -58,7 +57,7 @@ def read_tsv(path: Path) -> list[dict[str, str]]:
 def read_json(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
 def read_optional_tsv(path: Path) -> list[dict[str, str]]:
@@ -120,7 +119,7 @@ def timing_columns(rows: list[dict[str, str]]) -> list[str]:
     if any_value(rows, "samples_ms"):
         columns.append("samples_ms")
     columns.append("samples")
-    for metric in ("mean", "median", "stdev", "range"):
+    for metric in ("mean", "median", "mad", "iqr", "stdev", "range"):
         ms_column = f"{metric}_ms"
         seconds_column = f"{metric}_seconds"
         if any_value(rows, ms_column):
@@ -130,14 +129,22 @@ def timing_columns(rows: list[dict[str, str]]) -> list[str]:
 
 
 def convergence_columns(rows: list[dict[str, str]]) -> list[str]:
-    columns = ["rank", "target", "verdict"]
-    if any_value(rows, "delta_ms"):
-        columns.append("delta_ms")
-    columns.append("delta_seconds")
-    if any_value(rows, "median_ms"):
-        columns.append("median_ms")
-    columns.extend(["median_seconds", "noise_flag", "stop_reason"])
+    columns = ["rank", "kind", "policy_bucket", "target", "verdict"]
+    if any_value(rows, "sample_count"):
+        columns.append("sample_count")
+    for metric in ("delta", "median", "mad", "iqr", "stdev", "range"):
+        ms_column = f"{metric}_ms"
+        seconds_column = f"{metric}_seconds"
+        if any_value(rows, ms_column):
+            columns.append(ms_column)
+        if any_value(rows, seconds_column):
+            columns.append(seconds_column)
+    columns.extend(["noise_flag", "stop_reason"])
     return columns
+
+
+def optional_columns(rows: list[dict[str, str]], candidates: list[str]) -> list[str]:
+    return [column for column in candidates if any_value(rows, column)]
 
 
 def summarize_control(attempts: list[dict[str, str]]) -> dict[str, str]:
@@ -149,14 +156,48 @@ def summarize_control(attempts: list[dict[str, str]]) -> dict[str, str]:
 
 def history_columns(rows: list[dict[str, str]]) -> list[str]:
     columns = ["bundle_id", "recorded_at", "kind", "target"]
-    if any_value(rows, "median_ms"):
-        columns.append("median_ms")
-    if any_value(rows, "stdev_ms"):
-        columns.append("stdev_ms")
-    if any_value(rows, "range_ms"):
-        columns.append("range_ms")
+    for metric in ("median", "mad", "iqr", "stdev", "range", "delta"):
+        ms_column = f"{metric}_ms"
+        seconds_column = f"{metric}_seconds"
+        if any_value(rows, ms_column):
+            columns.append(ms_column)
+        elif any_value(rows, seconds_column):
+            columns.append(seconds_column)
     columns.extend(["noise_flag", "compatibility_tag"])
     return columns
+
+
+def control_distribution_text(control: dict[str, str]) -> str:
+    fields = [
+        ("sample_count", "sample_count"),
+        ("median_ms", "median_ms"),
+        ("mad_ms", "mad_ms"),
+        ("iqr_ms", "iqr_ms"),
+        ("stdev_ms", "stdev_ms"),
+        ("range_ms", "range_ms"),
+    ]
+    parts = [f"{label}=`{control.get(column, '')}`" for label, column in fields if control.get(column)]
+    if not parts:
+        return "Current control distribution: no robust timing fields recorded."
+    return "Current control distribution: " + "; ".join(parts) + "."
+
+
+def convergence_reason_text(state: dict[str, object], noise_status: str) -> str:
+    reason = str(state.get("last_exit_reason") or "unknown")
+    sample_floor = "at least 5 measured samples for promotion and 7 for bundle audit"
+    if reason == "convergence_proven":
+        detail = "Convergence may be claimed only when the minimum sample floor and UCB rule are both satisfied."
+    elif reason == "budget_stop":
+        detail = "Budget stop means the loop stopped spending attempts; it is not convergence proof."
+    elif reason.upper() == "NOISY" or noise_status.lower() == "noisy":
+        detail = "NOISY pauses performance judgment and must not be rewritten as accepted, rejected, or convergence."
+    elif reason == "compare_pass":
+        detail = "Compare passed, but promotion still needs repeated candidate-vs-control timing evidence."
+    elif reason == "compare_failed":
+        detail = "Compare failed, so the batch cannot promote performance changes."
+    else:
+        detail = "Treat the stop reason as run-state context, not as promotion proof by itself."
+    return f"Convergence reason: `{reason}`. {detail} Sample policy: {sample_floor}."
 
 
 def find_browser() -> Path | None:
@@ -192,14 +233,24 @@ def build_markdown(
     attempts: list[dict[str, str]],
     cooldown: list[dict[str, str]],
     images: list[Path],
+    patch_queue: list[dict[str, str]] | None = None,
+    neutral_pool: list[dict[str, str]] | None = None,
+    retry_conditions: list[dict[str, str]] | None = None,
     history_rows: list[dict[str, str]] | None = None,
     history_path: Path | None = None,
     run_state: dict[str, object] | None = None,
 ) -> str:
     state = run_state or {}
+    patch_queue = patch_queue or []
+    neutral_pool = neutral_pool or []
+    retry_conditions = retry_conditions or []
     control = summarize_control(attempts)
-    exploit = [row for row in attempts if row.get("policy_bucket") == "exploit"]
-    explore = [row for row in attempts if row.get("policy_bucket") == "explore"]
+    exploit = [row for row in attempts if row.get("policy_bucket") in {"exploit", "evidence"}]
+    explore = [
+        row
+        for row in attempts
+        if row.get("policy_bucket") in {"explore", "insight", "combination"} or row.get("experiment_kind") == "neutral_stack"
+    ]
     reserve = [row for row in attempts if row.get("policy_bucket") == "reserve"]
     blocked = [row for row in cooldown if row.get("status") == "blocked"]
     cooled = [row for row in cooldown if row.get("status") != "blocked"]
@@ -225,15 +276,27 @@ def build_markdown(
         active_gate=current_context["active_gate"],
         sample_unit=current_context["sample_unit"],
     )
+    current_time_window = current_context["time_window"]
     compatible_control_rows = [row for row in compatible_history if row.get("kind") == "control"]
     compatible_candidate_rows = [row for row in compatible_history if row.get("kind") != "control"]
+    current_window_rows = [row for row in compatible_history if row.get("time_window") == current_time_window]
+    current_window_control_rows = [row for row in current_window_rows if row.get("kind") == "control"]
     compatible_control_medians_ms = [value for value in (parse_float(row.get("median_ms")) for row in compatible_control_rows) if value is not None]
+    current_window_control_medians_ms = [
+        value for value in (parse_float(row.get("median_ms")) for row in current_window_control_rows) if value is not None
+    ]
     history_control_median = statistics.median(compatible_control_medians_ms) if compatible_control_medians_ms else None
     history_control_mad = median_absolute_deviation(compatible_control_medians_ms) if compatible_control_medians_ms else None
     history_control_range = (
         max(compatible_control_medians_ms) - min(compatible_control_medians_ms)
         if len(compatible_control_medians_ms) > 1
         else 0.0
+    )
+    current_window_control_median = (
+        statistics.median(current_window_control_medians_ms) if current_window_control_medians_ms else None
+    )
+    current_window_control_mad = (
+        median_absolute_deviation(current_window_control_medians_ms) if current_window_control_medians_ms else None
     )
     history_rows_display = sorted(
         compatible_history,
@@ -249,6 +312,34 @@ def build_markdown(
         "\u517c\u5bb9\u7ec4\u4ec5\u7edf\u8ba1\u5f53\u524d control_head \u4e0b\u7684 ms-native \u6837\u672c\uff1b"
         "\u4e0d\u517c\u5bb9\u7684\u5386\u53f2\u884c\u4fdd\u7559\u5728\u5386\u53f2\u6587\u4ef6\u91cc\uff0c"
         "\u4f46\u4e0d\u6df7\u5165\u5f53\u524d\u566a\u58f0\u5e26\u3002"
+    )
+    current_control_text = control_distribution_text(control) if control else "Current control row is missing."
+    same_host_text = (
+        "Same-host compatible comparison: "
+        f"`{len(compatible_control_rows)}` control rows and `{len(compatible_candidate_rows)}` candidate/diagnostic rows "
+        f"match host_key `{current_context['host_key']}`, control_head `{current_context['control_head']}`, "
+        f"active_gate `{current_context['active_gate']}`, and sample_unit `{current_context['sample_unit']}`."
+    )
+    historical_window_text = (
+        "Historical-window comparison: "
+        f"time_window `{current_time_window}` has `{len(current_window_control_rows)}` compatible control rows; "
+        f"window median `{format_float(current_window_control_median)}ms`, "
+        f"window MAD `{format_float(current_window_control_mad)}ms`; "
+        f"all compatible-history median `{format_float(history_control_median)}ms`, "
+        f"MAD `{format_float(history_control_mad)}ms`, range `{format_float(history_control_range)}ms`."
+    )
+    noise_status_text = (
+        f"Noise status: control noise_flag `{noise_flag}`, run_state noise_status `{state.get('noise_status', 'unknown')}`. "
+        "NOISY pauses judgment; it does not accept, reject, or prove convergence."
+    )
+    convergence_reason = convergence_reason_text(state, str(state.get("noise_status") or noise_flag))
+    sample_policy = state.get("sample_policy") if isinstance(state.get("sample_policy"), dict) else {}
+    sample_policy_text = (
+        "Sample policy: "
+        f"screening `{sample_policy.get('screening_measured_samples', 3)}` measured; "
+        f"promotion `{sample_policy.get('promotion_measured_samples', 5)}` measured; "
+        f"bundle audit `{sample_policy.get('bundle_audit_measured_samples', 7)}` measured. "
+        "Screening rows are not promotion proof."
     )
 
     title = f"{report_date} {TITLE_SUFFIX}"
@@ -278,6 +369,7 @@ def build_markdown(
                 [control] if control else [],
                 ["control_head", *timing_columns([control] if control else []), "noise_flag"],
             ),
+            current_control_text,
             f"\u767d\u5929/\u5f53\u524d\u6296\u52a8\u6807\u8bb0\uff1a`{noise_flag}`\u3002\u6837\u672c\uff1a`{sample_text}`\u3002",
             "",
             f"## 3. {SECTION_HOTSPOTS}",
@@ -311,6 +403,9 @@ def build_markdown(
             f"## 6. {SECTION_PLATEAU}",
             "",
             f"\u505c\u6b62\u539f\u56e0\uff1a`{stop_reason}`\u3002epsilon: `{epsilon}`\uff1bUCB_95(E[delta]): `{ucb95}`\u3002",
+            noise_status_text,
+            convergence_reason,
+            sample_policy_text,
             "",
             "\u5f53\u524d\u4e0d\u80fd\u53ea\u6309\u6700\u5927 hotspot \u8d2a\u5fc3\u5c1d\u8bd5\u3002"
             "\u5b9e\u9a8c\u961f\u5217\u540c\u65f6\u4fdd\u7559 exploit\u3001reserve \u548c neutral stack\uff0c"
@@ -338,10 +433,91 @@ def build_markdown(
         ]
     )
 
+    if patch_queue or neutral_pool or retry_conditions:
+        lines.extend(
+            [
+                "## 8. Headless artifact surface",
+                "",
+                f"Patch queue rows: `{len(patch_queue)}`; neutral pool rows: `{len(neutral_pool)}`; retry-condition rows: `{len(retry_conditions)}`.",
+                "",
+                "Patch queue:",
+                "",
+                md_table(
+                    patch_queue,
+                    optional_columns(
+                        patch_queue,
+                        [
+                            "rank",
+                            "candidate_id",
+                            "target",
+                            "patch_path",
+                            "policy_bucket",
+                            "experiment_kind",
+                            "stack_members",
+                            "touched_files",
+                            "hypothesis",
+                            "compare_result",
+                            "timing_summary",
+                            "semantic_risk",
+                            "stack_compatibility",
+                            "queue_state",
+                            "build_status",
+                            "compare_status",
+                            "timing_status",
+                            "measured_samples",
+                            "required_samples",
+                            "retry_condition",
+                        ],
+                    ),
+                    limit=12,
+                ),
+                "",
+                "Neutral pool:",
+                "",
+                md_table(
+                    neutral_pool,
+                    optional_columns(
+                        neutral_pool,
+                        [
+                            "candidate_id",
+                            "target",
+                            "lane",
+                            "patch_path",
+                            "touched_files",
+                            "hypothesis",
+                            "experiment_kind",
+                            "stack_members",
+                            "compare_result",
+                            "sample_count",
+                            "aggregate_gain_seconds",
+                            "timing_summary",
+                            "semantic_risk",
+                            "stack_compatibility",
+                            "validation_status",
+                            "retry_condition",
+                        ],
+                    ),
+                    limit=12,
+                ),
+                "",
+                "Retry conditions:",
+                "",
+                md_table(
+                    retry_conditions,
+                    optional_columns(
+                        retry_conditions,
+                        ["target", "status", "noise_flag", "retry_after", "required_condition", "last_exit_reason"],
+                    ),
+                    limit=12,
+                ),
+                "",
+            ]
+        )
+
     if history_rows:
         lines.extend(
             [
-                f"## 8. {SECTION_HISTORY}",
+                f"## 9. {SECTION_HISTORY}",
                 "",
                 f"\u5386\u53f2\u6587\u4ef6\uff1a`{history_path}`\u3002",
                 f"Host key\uff1a`{current_context['host_key']}`\uff1bactive_gate\uff1a`{current_context['active_gate']}`\uff1b"
@@ -354,6 +530,8 @@ def build_markdown(
                 f"\u5386\u53f2 control \u4e2d\u4f4d\u6570\uff1a`{format_float(history_control_median)}ms`\u3002",
                 f"\u5386\u53f2 control MAD\uff1a`{format_float(history_control_mad)}ms`\uff1b"
                 f"\u5386\u53f2 control \u8303\u56f4\uff1a`{format_float(history_control_range)}ms`\u3002",
+                same_host_text,
+                historical_window_text,
                 history_note,
                 "",
                 md_table(
@@ -498,7 +676,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_CONTROL_LOOP,
         help="Directory containing profile.tsv, hotspots.tsv, attempts.tsv, cooldown.tsv.",
     )
-    parser.add_argument("--report-root", type=Path, default=DEFAULT_REPORT_ROOT, help="Report root directory.")
+    parser.add_argument(
+        "--report-root",
+        type=Path,
+        help="Report root directory. Defaults to <experiment-root>/reports for the selected control-loop dir.",
+    )
     parser.add_argument("--image", type=Path, action="append", default=[], help="Optional image to reference/embed. Repeat for multiple images.")
     parser.add_argument("--run-state", type=Path, help="Optional run_state.json with status and convergence metrics.")
     parser.add_argument("--no-pdf", action="store_true", help="Only write Markdown.")
@@ -513,7 +695,10 @@ def main() -> int:
     if not control_dir.is_absolute():
         control_dir = root / control_dir
 
-    report_root = args.report_root
+    if args.report_root is None:
+        report_root = experiment_root_for_path(control_dir) / "reports"
+    else:
+        report_root = args.report_root
     if not report_root.is_absolute():
         report_root = root / report_root
 
@@ -530,6 +715,9 @@ def main() -> int:
     hotspots = read_tsv(control_dir / "hotspots.tsv")
     attempts = read_tsv(control_dir / "attempts.tsv")
     cooldown = read_tsv(control_dir / "cooldown.tsv")
+    patch_queue = read_optional_tsv(control_dir / "patch_queue.tsv")
+    neutral_pool = read_optional_tsv(control_dir / "neutral_pool.tsv")
+    retry_conditions = read_optional_tsv(control_dir / "retry_conditions.tsv")
     history_candidates = history_path_candidates(control_dir)
     history_rows = read_history_rows(history_candidates)
     shared_history_path = experiment_root_for_path(control_dir) / HISTORY_FILE_NAME
@@ -546,6 +734,9 @@ def main() -> int:
         attempts,
         cooldown,
         images,
+        patch_queue=patch_queue,
+        neutral_pool=neutral_pool,
+        retry_conditions=retry_conditions,
         history_rows=history_rows,
         history_path=history_path if history_rows else None,
         run_state=run_state,
