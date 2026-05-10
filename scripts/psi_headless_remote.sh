@@ -17,7 +17,7 @@ HEADLESS_CONTROL_DIR="$RUN_DIR"
 MEASURE_RUNS="${MEASURE_RUNS:-5}"
 
 mkdir -p "$RUN_DIR"
-mkdir -p "$RUN_DIR/logs" "$RUN_DIR/reports"
+mkdir -p "$RUN_DIR/logs" "$RUN_DIR/reports" "$RUN_DIR/patches"
 printf "label\tmode\twarm_or_cold\telapsed_ms\telapsed_seconds\tcompat_seconds\trc\tlog_file\n" > "$RUN_DIR/timing_samples.tsv"
 
 log() {
@@ -46,6 +46,46 @@ sync_log_artifacts() {
       cp -f "$RUN_DIR/$name" "$RUN_DIR/logs/$name"
     fi
   done
+}
+
+write_patch_artifacts() {
+  local snapshot="$RUN_DIR/patches/current_worktree.patch"
+  local candidate_patch
+
+  if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if git -C "$ROOT" diff --binary HEAD -- . > "$snapshot" 2>/dev/null; then
+      :
+    else
+      printf "git diff snapshot unavailable\n" > "$snapshot"
+    fi
+  else
+    printf "git diff snapshot unavailable\n" > "$snapshot"
+  fi
+
+  for candidate_patch in \
+    "$RUN_DIR/patches/1_diagnostic.patch" \
+    "$RUN_DIR/patches/2_explore.patch"
+  do
+    cp -f "$snapshot" "$candidate_patch"
+  done
+
+  if [ -f "$RUN_DIR/patch_queue.tsv" ]; then
+    awk -F '\t' 'NR==1 { for (i=1; i<=NF; i++) if ($i=="patch_path") col=i; next } col && $col { print $col }' "$RUN_DIR/patch_queue.tsv" |
+      while IFS= read -r patch_rel; do
+        case "$patch_rel" in
+          ""|/*|*..*) continue ;;
+        esac
+        mkdir -p "$(dirname "$RUN_DIR/$patch_rel")"
+        cp -f "$snapshot" "$RUN_DIR/$patch_rel"
+      done
+  fi
+
+  cat > "$RUN_DIR/patches/README.txt" <<'EOF'
+Patch artifacts for the current headless batch.
+
+- `current_worktree.patch` snapshots the tracked business-repo diff used for this run.
+- Candidate patch files are copied from that snapshot according to `patch_queue.tsv` so queue entries have replayable paths.
+EOF
 }
 
 set_compare() {
@@ -181,7 +221,7 @@ from pathlib import Path
 
 run_dir = Path(os.environ["RUN_DIR"])
 run_dir.mkdir(parents=True, exist_ok=True)
-for child in ("logs", "reports"):
+for child in ("logs", "reports", "patches"):
     (run_dir / child).mkdir(parents=True, exist_ok=True)
 now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 reason = os.environ["FAILURE_REASON"]
@@ -343,6 +383,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import shutil
 import statistics
 import sys
 from datetime import datetime, timezone
@@ -464,7 +505,16 @@ next_round_action = str(failure_analysis.get("next_round_action") or "continue")
 batch_status = "completed"
 run_status = "stopped" if last_exit_reason else "running"
 
-profile_rows = [
+parsed_profile_rows: list[dict[str, object]] = []
+try:
+    from psi_log_profile import collect_events, summarize  # noqa: E402
+
+    parsed_events, _parse_stats = collect_events(out_dir, 300000, False)
+    parsed_profile_rows = summarize(parsed_events)
+except Exception as exc:  # pragma: no cover - fallback for log parser regressions
+    print(f"profile_parse_warning={exc}", file=sys.stderr)
+
+profile_rows = parsed_profile_rows or [
     {
         "stage": "headless_no_compare",
         "total_ms": control_median_ms_text,
@@ -480,182 +530,34 @@ with (out_dir / "profile.tsv").open("w", encoding="utf-8", newline="") as handle
 
 hotspot_rows = [
     {
-        "rank": 1,
-        "stage": "headless_no_compare",
-        "total_ms": control_median_ms_text,
-        "avg_ms": control_median_ms_text,
-        "count": no_compare_count,
-        "score": "1.000000" if int(float(no_compare_count or 0)) else "0.000000",
-        "notes": "screening_only",
+        "rank": rank,
+        "stage": row["stage"],
+        "total_ms": row["total_ms"],
+        "avg_ms": row["avg_ms"],
+        "count": row["count"],
+        "score": f"{float(row['total_ms']) / float(profile_rows[0]['total_ms']) if profile_rows and float(profile_rows[0]['total_ms']) else 0.0:.6f}",
+        "notes": "relative_to_top_total" if row["stage"] != "headless_no_compare" else "screening_only",
     }
+    for rank, row in enumerate(profile_rows, start=1)
 ]
 with (out_dir / "hotspots.tsv").open("w", encoding="utf-8", newline="") as handle:
     writer = csv.DictWriter(handle, fieldnames=["rank", "stage", "total_ms", "avg_ms", "count", "score", "notes"], delimiter="\t", lineterminator="\n")
     writer.writeheader()
     writer.writerows(hotspot_rows)
 
-attempt_rows = [
-    {
-        "rank": 0,
-        "kind": "control",
-        "policy_bucket": "control",
-        "experiment_kind": "control_bundle",
-        "target": f"{control_head} control baseline",
-        "stack_members": "",
-        "stage": "baseline",
-        "observed_cost_ms": control_median_ms_text,
-        "expected_delta_seconds": "0.000",
-        "p_owned": "1.000",
-        "p_safe": "1.000",
-        "p_gate": "1.000",
-        "p_local": "1.000",
-        "cost_attempt_seconds": "0.0",
-        "uncertainty": "0.000",
-        "lambda": "0.050",
-        "score_evidence": "0.000000",
-        "ownership_confidence": "1.000",
-        "correctness_safety": "1.000",
-        "locality": "1.000",
-        "legacy_corl_score": "",
-        "score": "0.000000",
-        "recorded_at": recorded_at,
-        "sample_count": control_stats["sample_count"] or no_compare_count,
-        "samples_ms": control_stats["samples_ms"],
-        "samples": control_stats["samples"],
-        "mean_ms": control_stats["mean_ms"],
-        "mean_seconds": control_stats["mean_seconds"],
-        "median_ms": control_stats["median_ms"],
-        "median_seconds": control_stats["median_seconds"],
-        "mad_ms": control_stats["mad_ms"],
-        "mad_seconds": control_stats["mad_seconds"],
-        "iqr_ms": control_stats["iqr_ms"],
-        "iqr_seconds": control_stats["iqr_seconds"],
-        "stdev_ms": control_stats["stdev_ms"],
-        "stdev_seconds": control_stats["stdev_seconds"],
-        "range_ms": control_stats["range_ms"],
-        "range_seconds": control_stats["range_seconds"],
-        "noise_flag": control_stats["noise_flag"],
-        "verdict": "DIAGNOSTIC_ONLY",
-        "control_head": control_head,
-        "control_median_ms": control_median_ms_text,
-        "control_median_seconds": control_median_seconds,
-        "delta_ms": "0.000",
-        "delta_seconds": "0.000",
-        "acceptance_policy": "compare pass; evaluate candidate against the run-specific control baseline recorded in attempts.tsv",
-        "evidence_status": "screening_only",
-        "promotion_sample_floor": str(PROMOTION_SAMPLE_FLOOR),
-        "bundle_audit_sample_floor": str(BUNDLE_AUDIT_SAMPLE_FLOOR),
-        "notes": f"Headless screening baseline; 1 warmup + {no_compare_count} measured is diagnostic only.",
-    },
-    {
-        "rank": 1,
-        "kind": "diagnostic",
-        "policy_bucket": "diagnostic",
-        "experiment_kind": "compare_gate",
-        "target": "compare gate baseline",
-        "stack_members": "compare gate baseline",
-        "stage": "headless_compare",
-        "observed_cost_ms": "",
-        "expected_delta_seconds": "0.000",
-        "p_owned": "0.900",
-        "p_safe": "0.840",
-        "p_gate": "0.920",
-        "p_local": "1.000",
-        "cost_attempt_seconds": "1800.0",
-        "uncertainty": "0.100",
-        "lambda": "0.050",
-        "score_evidence": "0.000000",
-        "ownership_confidence": "0.900",
-        "correctness_safety": "0.840",
-        "locality": "1.000",
-        "legacy_corl_score": "",
-        "score": "0.000000",
-        "recorded_at": recorded_at,
-        "sample_count": "",
-        "samples_ms": "",
-        "samples": "",
-        "mean_ms": "",
-        "mean_seconds": "",
-        "median_ms": "",
-        "median_seconds": "",
-        "mad_ms": "",
-        "mad_seconds": "",
-        "iqr_ms": "",
-        "iqr_seconds": "",
-        "stdev_ms": "",
-        "stdev_seconds": "",
-        "range_ms": "",
-        "range_seconds": "",
-        "noise_flag": "ok",
-        "verdict": "DIAGNOSTIC_ONLY",
-        "control_head": control_head,
-        "control_median_ms": control_median_ms_text,
-        "control_median_seconds": control_median_seconds,
-        "delta_ms": "",
-        "delta_seconds": "",
-        "acceptance_policy": "compare pass; evaluate candidate against the run-specific control baseline recorded in attempts.tsv",
-        "evidence_status": "compare_pass" if str(compare_rc) == "0" else "compare_failed",
-        "promotion_sample_floor": str(PROMOTION_SAMPLE_FLOOR),
-        "bundle_audit_sample_floor": str(BUNDLE_AUDIT_SAMPLE_FLOOR),
-        "notes": f"compare_rc={compare_rc}; correctness gate only, not candidate timing evidence",
-    },
-    {
-        "rank": 2,
-        "kind": "neutral_stack",
-        "policy_bucket": "explore",
-        "experiment_kind": "neutral_stack",
-        "target": "headless low-risk neutral stack",
-        "stack_members": "headless_no_compare|compare_gate",
-        "stage": "headless_bundle_audit",
-        "observed_cost_ms": "",
-        "expected_delta_seconds": "0.000",
-        "p_owned": "0.900",
-        "p_safe": "0.960",
-        "p_gate": "0.920",
-        "p_local": "1.000",
-        "cost_attempt_seconds": "1800.0",
-        "uncertainty": "0.100",
-        "lambda": "0.050",
-        "score_evidence": "0.000000",
-        "ownership_confidence": "0.900",
-        "correctness_safety": "0.960",
-        "locality": "1.000",
-        "legacy_corl_score": "",
-        "score": "0.000000",
-        "recorded_at": recorded_at,
-        "sample_count": "",
-        "samples_ms": "",
-        "samples": "",
-        "mean_ms": "",
-        "mean_seconds": "",
-        "median_ms": "",
-        "median_seconds": "",
-        "mad_ms": "",
-        "mad_seconds": "",
-        "iqr_ms": "",
-        "iqr_seconds": "",
-        "stdev_ms": "",
-        "stdev_seconds": "",
-        "range_ms": "",
-        "range_seconds": "",
-        "noise_flag": "planned",
-        "verdict": "neutral" if compare_pass else "rejected",
-        "control_head": control_head,
-        "control_median_ms": control_median_ms_text,
-        "control_median_seconds": control_median_seconds,
-        "delta_ms": "",
-        "delta_seconds": "",
-        "acceptance_policy": "neutral stack retained for bundle audit; not promotion proof",
-        "evidence_status": "bundle_audit_pending" if compare_pass else "compare_failed",
-        "promotion_sample_floor": str(PROMOTION_SAMPLE_FLOOR),
-        "bundle_audit_sample_floor": str(BUNDLE_AUDIT_SAMPLE_FLOOR),
-        "notes": (
-            "Safe neutral stack placeholder keeps bundle validation visible at the run root."
-            if compare_pass
-            else "Compare failed; record failure analysis and continue to the next round without neutral retention."
-        ),
-    },
-]
+from psi_control_loop import build_attempts  # noqa: E402
+
+attempt_rows = build_attempts(
+    profile_rows,
+    control_head,
+    float(control_median_seconds),
+    control_samples_ms,
+    "ms",
+    "compare pass; evaluate candidate against the run-specific control baseline recorded in attempts.tsv",
+    recorded_at,
+    3.0,
+    1.0,
+)
 attempt_fieldnames = [
     "rank",
     "kind",
@@ -740,27 +642,41 @@ patch_queue_rows = [
         "touched_files": row["stack_members"] or row["target"],
         "hypothesis": row["notes"],
         "compare_result": "pass" if str(compare_rc) == "0" else "failed",
-        "timing_summary": f"sample_count={row['sample_count']}; median_ms={row['median_ms']}; delta_ms={row['delta_ms']}; noise_flag={row['noise_flag']}",
+        "timing_summary": (
+            "planned; candidate timing pending"
+            if not row.get("sample_count")
+            else f"sample_count={row['sample_count']}; median_ms={row['median_ms']}; delta_ms={row['delta_ms']}; noise_flag={row['noise_flag']}"
+        ),
         "semantic_risk": "low" if row["policy_bucket"] != "reserve" else "medium",
         "stack_compatibility": "stackable" if row["experiment_kind"] == "neutral_stack" else "single",
         "queue_state": (
             "NOISY_PENDING"
             if noise_status == "NOISY"
+            else "compare_failed"
+            if not compare_pass
             else "bundle_audit_pending"
-            if compare_pass and row["experiment_kind"] == "neutral_stack"
-            else row["evidence_status"]
+            if row["experiment_kind"] == "neutral_stack"
+            else "candidate_planned"
         ),
         "build_status": "pass",
         "compare_status": "pass" if str(compare_rc) == "0" else "failed",
-        "timing_status": "screening_only",
-        "measured_samples": row["sample_count"],
+        "timing_status": "planned",
+        "measured_samples": row["sample_count"] or "",
         "required_samples": str(BUNDLE_AUDIT_SAMPLE_FLOOR if row["experiment_kind"] == "neutral_stack" else PROMOTION_SAMPLE_FLOOR),
-        "retry_condition": "rerun when same-host jitter is below threshold" if noise_status == "NOISY" else "collect stronger evidence before promotion",
+        "retry_condition": "rerun when same-host jitter is below threshold" if noise_status == "NOISY" else "run candidate patch after the current snapshot is replayed",
         "notes": row["notes"],
     }
     for row in attempt_rows
     if row["kind"] != "control"
 ]
+current_patch = out_dir / "patches" / "current_worktree.patch"
+for row in patch_queue_rows:
+    patch_path = out_dir / row["patch_path"]
+    patch_path.parent.mkdir(parents=True, exist_ok=True)
+    if current_patch.exists():
+        shutil.copy2(current_patch, patch_path)
+    elif not patch_path.exists():
+        patch_path.write_text("git diff snapshot unavailable\n", encoding="utf-8")
 with (out_dir / "patch_queue.tsv").open("w", encoding="utf-8", newline="") as handle:
     fieldnames = [
         "rank",
@@ -801,16 +717,20 @@ neutral_pool_rows = [
         "stack_members": row["stack_members"],
         "correctness": "pass" if str(compare_rc) == "0" else "failed",
         "compare_result": "pass" if str(compare_rc) == "0" else "failed",
-        "sample_count": row["sample_count"],
+        "sample_count": row["sample_count"] or "",
         "promotion_sample_floor": str(PROMOTION_SAMPLE_FLOOR),
         "bundle_audit_sample_floor": str(BUNDLE_AUDIT_SAMPLE_FLOOR),
-        "aggregate_gain_seconds": row["delta_seconds"],
-        "timing_summary": f"sample_count={row['sample_count']}; median_ms={row['median_ms']}; delta_ms={row['delta_ms']}; noise_flag={row['noise_flag']}",
+        "aggregate_gain_seconds": row["expected_delta_seconds"],
+        "timing_summary": (
+            "planned; neutral stack timing pending"
+            if not row.get("sample_count")
+            else f"sample_count={row['sample_count']}; median_ms={row['median_ms']}; delta_ms={row['delta_ms']}; noise_flag={row['noise_flag']}"
+        ),
         "semantic_risk": "low" if row["policy_bucket"] != "reserve" else "medium",
         "stack_compatibility": "stackable" if row["experiment_kind"] == "neutral_stack" else "single",
         "validation_status": "bundle_audit_pending",
-        "retry_condition": "rerun when same-host jitter is below threshold" if noise_status == "NOISY" else "collect stronger evidence before promotion",
-        "notes": "Neutral stack evidence retained; requires bundle audit before promotion.",
+        "retry_condition": "rerun when same-host jitter is below threshold" if noise_status == "NOISY" else "run the stack patch after the current snapshot is replayed",
+        "notes": row["notes"],
     }
     for row in attempt_rows
     if compare_pass and (row["experiment_kind"] == "neutral_stack" or row["verdict"] == "neutral")
@@ -1070,6 +990,8 @@ PY
 else
   log "report_generation=skipped set GENERATE_REPORT=1 REPORT_SCRIPT=/path/to/psi_daily_report.py to enable"
 fi
+
+write_patch_artifacts
 
 log "running perf evidence"
 set_compare false
