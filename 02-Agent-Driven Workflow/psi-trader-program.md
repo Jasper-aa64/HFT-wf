@@ -13,16 +13,62 @@ C:\Users\liangjunming\Desktop\work\Code1\psi-trader-liangjunming
 Primary metric:
 
 ```text
-wall-clock seconds over warm measured runs
+wall-clock milliseconds over warm measured runs, with seconds summaries kept as derived compatibility output
 ```
 
 Gate policy:
 
 ```text
-Class A / algorithmic: correctness must pass; performance is recorded only
+Class A / algorithmic: correctness must pass; bundle drift audit still required; performance is recorded only
 Class B / empirical: correctness must pass; Welch p < 0.05 and candidate mean < baseline mean
 Bundle / rebaseline: 7-sample median must improve by at least 5 seconds versus original_baseline.txt
 ```
+
+Control-loop policy:
+
+```text
+Current control baseline: recorded in the remote control bundle and mirrored
+  locally in the control-loop artifacts for the active run.
+Formal control-loop artifacts:
+  experiments/<run-id>/control_loop/profile.tsv
+  experiments/<run-id>/control_loop/hotspots.tsv
+  experiments/<run-id>/control_loop/attempts.tsv
+  experiments/<run-id>/control_loop/cooldown.tsv
+Recorder: scripts/psi_control_loop.py
+Profile runs: DIAGNOSTIC_ONLY, not PASS/FAIL_PERF
+Selection policy: three lanes: evidence + insight + combination; not greedy-only hotspot picking
+Neutral stacks: allowed for low-risk exploration candidates
+```
+
+Profile ranking is the evidence lane, not the whole search strategy. A high
+ranked hotspot is a strong prompt for a candidate, but it must not suppress a
+well-argued cache/locality hypothesis elsewhere.
+
+Selection lanes:
+
+```text
+Evidence lane: profile/hotspots ranked by observed cost, ownership confidence, correctness safety, and locality.
+Insight lane: agent-proposed Class A or cache/locality candidates, including small improvements outside the top hotspot when the rationale is strong.
+Combination lane: neutral-stack validation for individually neutral, low-risk candidates.
+```
+
+Class A does not mean "no testing" or "guaranteed no regression". It means the
+diff has no clear performance-regression mechanism, so one noisy timing sample
+does not reject it by itself. Correctness, compare output, and bundle drift
+audit still apply.
+
+The harness should constrain verification quality, evidence recording, and
+rollback discipline. It should not overconstrain candidate generation as model
+reasoning improves.
+
+The policy is not "no sub-agent"; it is visible, bounded Codex sub-agents with
+the main thread staying conversational. Detached remote work such as
+`nohup`, `tmux`, or `screen` is forbidden unless the user explicitly approves
+it and the run exposes a visible status artifact. The main thread should not
+sit behind a single long blocking wait when a sub-agent is active; use short
+status checks, mailbox updates, or user-triggered status queries instead.
+If the user asks a question mid-run, answer it directly and continue the batch
+tracking afterward.
 
 ## Allowed Files
 
@@ -43,6 +89,10 @@ baseline parquet files
 tests or evaluator scripts
 docs as part of an optimization attempt
 ```
+
+Do not treat Windows as the performance authority. The remote Linux control
+bundle is authoritative for the Psi loop, while HFT-wf remains the local
+evidence and planning repo.
 
 ## Evaluator
 
@@ -152,6 +202,10 @@ removing redundant work with no new hot-path allocation
 using an already-computed value instead of recomputing it
 ```
 
+Class A still requires the correctness gate and later bundle drift audit. Do
+not accept a Class A candidate only because it is labeled algorithmic, and do
+not reject it only because one daytime sample is noisy.
+
 Class B is the default when there is doubt:
 
 ```text
@@ -173,6 +227,11 @@ reduce map lookups in hot loops
 reduce compare-only work from production output path
 ```
 
+Cache/locality candidates are valid even when they do not target the top timed
+stage if they reduce repeated access, improve data locality, reduce pointer
+chasing or allocation, or reuse hot data. Record the affected stage, expected
+locality mechanism, and semantic risk before testing.
+
 Avoid:
 
 ```text
@@ -187,3 +246,47 @@ changing config to make the benchmark easier
 Known correction:
 
 `PsiReadWrite::compareFile()` is not a sufficient judge because it logs mismatches but does not fail the process. Use `compare_parquet_factor` for the correctness gate.
+
+Control-loop recording:
+
+```text
+Record timestamp, samples, mean, median, stddev, and range in attempts.tsv.
+Record warm/cold distinction; compare warm measured runs against warm baselines.
+Mark runs as noisy when variance or range crosses the configured threshold.
+Use cooldown.tsv to hold known targets instead of retrying them greedily.
+The default exploration quota should include at least one low-risk neutral stack.
+```
+
+Report generation:
+
+```powershell
+python scripts\psi_daily_report.py `
+  --date <YYYY-MM-DD> `
+  --control-loop-dir experiments\<run-id> `
+  --run-state experiments\<run-id>\run_state.json `
+  --image experiments\<run-id>\charts\runtime_convergence.png `
+  --image experiments\<run-id>\charts\convergence_decision.png
+```
+
+The report script writes performance optimization reports only. The parent
+`日报（中文）\<date>` directory is the user's dated workspace, not a daily-report
+classification for the generated document. The script writes only Markdown and
+PDF to:
+
+```text
+C:\Users\liangjunming\Desktop\work\日报（中文）\<date>\<date> 性能优化报告.md
+C:\Users\liangjunming\Desktop\work\日报（中文）\<date>\<date> 性能优化报告.pdf
+```
+
+Do not name the file `report.*`, and do not call the document a daily report in
+the title or body. It uses a temporary HTML file only for PDF rendering and
+deletes it afterwards.
+
+Timing artifact compatibility:
+
+```text
+Headless timing artifacts must preserve millisecond capture for warmup, compare,
+and measured no-compare samples. Existing seconds fields and whole-second result
+lines remain derived compatibility output for older reports and notes, but
+accept/reject evidence should prefer the millisecond fields when present.
+```

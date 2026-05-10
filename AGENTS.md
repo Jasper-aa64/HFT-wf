@@ -18,7 +18,8 @@ If you're using Codex or another agent-capable tool, additional project-scoped h
 
 ## Subagents
 
-- ALWAYS wait for all subagents to complete before yielding.
+- Track all subagents to terminal status before using their results.
+- On Codex, prefer visible status updates and short checks; do not let one long synchronous wait block the user conversation.
 - Spawn subagents automatically when:
   - Parallelizable work (e.g., install + verify, npm test + typecheck, multiple tasks from plan)
   - Long-running or blocking tasks where a worker can run independently.
