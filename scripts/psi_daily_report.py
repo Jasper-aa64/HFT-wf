@@ -153,6 +153,21 @@ def optional_columns(rows: list[dict[str, str]], candidates: list[str]) -> list[
     return [column for column in candidates if any_value(rows, column)]
 
 
+def noisy_candidate_count(retry_conditions: list[dict[str, str]], patch_queue: list[dict[str, str]]) -> int:
+    targets = {
+        (row.get("target") or "").strip()
+        for row in retry_conditions
+        if (row.get("status") or "").strip() == "NOISY_PENDING"
+    }
+    targets.update(
+        (row.get("target") or "").strip()
+        for row in patch_queue
+        if (row.get("queue_state") or "").strip() == "NOISY_PENDING"
+    )
+    targets.discard("")
+    return len(targets)
+
+
 def summarize_control(attempts: list[dict[str, str]]) -> dict[str, str]:
     for row in attempts:
         if row.get("kind") == "control":
@@ -195,8 +210,10 @@ def convergence_reason_text(state: dict[str, object], noise_status: str) -> str:
         detail = "Convergence may be claimed only when the minimum sample floor and UCB rule are both satisfied."
     elif reason == "budget_stop":
         detail = "Budget stop means the loop stopped spending attempts; it is not convergence proof."
-    elif reason.upper() == "NOISY" or noise_status.lower() == "noisy":
-        detail = "NOISY pauses performance judgment and must not be rewritten as accepted, rejected, or convergence."
+    elif noise_status.lower() == "noisy":
+        detail = "NOISY pauses candidate-level judgment only; it does not replace the global stop reason."
+    elif reason.upper() == "NOISY":
+        detail = "Legacy NOISY rows should be treated as candidate-level pause state, not as a global stop reason."
     elif reason == "compare_pass":
         detail = "Compare passed, but promotion still needs repeated candidate-vs-control timing evidence."
     elif reason == "compare_failed":
@@ -271,6 +288,9 @@ def build_markdown(
     stop_reason = str(state.get("last_exit_reason") or "unknown")
     epsilon = state.get("epsilon")
     ucb95 = state.get("ucb95_expected_delta")
+    noisy_count = state.get("noisy_candidate_count")
+    if noisy_count in (None, ""):
+        noisy_count = noisy_candidate_count(retry_conditions, patch_queue)
     control_baseline_text = f"bundle median `{control_median}s`"
     if control_median_ms:
         control_baseline_text = f"bundle median `{control_median_ms}ms` (`{control_median}s`)"
@@ -338,7 +358,8 @@ def build_markdown(
     )
     noise_status_text = (
         f"Noise status: control noise_flag `{noise_flag}`, run_state noise_status `{state.get('noise_status', 'unknown')}`. "
-        "NOISY pauses judgment; it does not accept, reject, or prove convergence."
+        f"Noisy candidates paused: `{noisy_count}`. "
+        "NOISY pauses candidate-level judgment; it does not accept, reject, or prove convergence."
     )
     convergence_reason = convergence_reason_text(state, str(state.get("noise_status") or noise_flag))
     sample_policy = state.get("sample_policy") if isinstance(state.get("sample_policy"), dict) else {}

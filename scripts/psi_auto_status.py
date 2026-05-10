@@ -69,6 +69,21 @@ def count_rows(rows: list[dict[str, str]], column: str, value: str) -> int:
     return sum(1 for row in rows if (row.get(column) or "").strip() == value)
 
 
+def noisy_candidate_count(retry_conditions: list[dict[str, str]], patch_queue: list[dict[str, str]]) -> int:
+    targets = {
+        (row.get("target") or "").strip()
+        for row in retry_conditions
+        if (row.get("status") or "").strip() == "NOISY_PENDING"
+    }
+    targets.update(
+        (row.get("target") or "").strip()
+        for row in patch_queue
+        if (row.get("queue_state") or "").strip() == "NOISY_PENDING"
+    )
+    targets.discard("")
+    return len(targets)
+
+
 def latest_queue_state(rows: list[dict[str, str]]) -> str:
     if not rows:
         return ""
@@ -124,6 +139,7 @@ def main() -> int:
     print(f"neutral={state.get('neutral_count', counts['neutral'])}")
     print(f"rejected={state.get('rejected_count', counts['rejected'])}")
     print(f"noise_status={state.get('noise_status', 'unknown')}")
+    print(f"noisy_candidate_count={state.get('noisy_candidate_count', noisy_candidate_count(retry_conditions, patch_queue))}")
     print(f"last_exit_reason={state.get('last_exit_reason', '')}")
     print(f"failure_analysis_path={state.get('failure_analysis_path', '')}")
     print(f"failure_analysis_status={state.get('failure_analysis_status', failure_analysis.get('analysis_status', ''))}")

@@ -48,16 +48,12 @@ NOISE_RANGE_THRESHOLD = 5.0
 NOISE_STDEV_THRESHOLD = 1.5
 NOISE_CV_THRESHOLD = 0.03
 STOP_REASONS = {
+    "accepted",
     "convergence_proven",
-    "plateau",
-    "lane_cooldown_budget",
-    "NOISY",
-    "NOISY_PENDING",
-    "bundle_regression",
     "budget_stop",
     "no_targets",
-    "correctness_failed",
     "remote_failed",
+    "user_stopped",
 }
 SAMPLE_POLICY = {
     "screening_measured_samples": SCREENING_SAMPLE_FLOOR,
@@ -198,32 +194,35 @@ def classify_stop(
     min_samples: int = MIN_CONVERGENCE_SAMPLES,
 ) -> dict[str, object]:
     relevant = [attempt for attempt in attempts if attempt.verdict in {"accepted", "neutral", "rejected"}]
-    all_control = [sample for attempt in relevant for sample in attempt.control_samples]
+    judged_attempts: list[Attempt] = []
+    noisy_candidate_count = 0
+    for attempt in relevant:
+        if is_noisy(attempt.control_samples, attempt.candidate_samples):
+            noisy_candidate_count += 1
+        else:
+            judged_attempts.append(attempt)
+
+    all_control = [sample for attempt in judged_attempts for sample in attempt.control_samples]
     deltas = [
         delta_i(statistics.median(attempt.control_samples), statistics.median(attempt.candidate_samples))
-        for attempt in relevant
+        for attempt in judged_attempts
         if attempt.control_samples and attempt.candidate_samples
     ]
     epsilon = epsilon_for(all_control) if all_control else EPSILON_ABS_SECONDS
     ucb95 = ucb95_expected_delta(deltas)
     consecutive_no_accepted = 0
-    for attempt in reversed(relevant):
+    for attempt in reversed(judged_attempts):
         if attempt.verdict == "accepted":
             break
         consecutive_no_accepted += 1
 
-    if any(is_noisy(attempt.control_samples, attempt.candidate_samples) for attempt in relevant):
-        reason = "NOISY_PENDING"
-        noise_status = "NOISY"
-    elif len(deltas) >= min_samples and ucb95 is not None and ucb95 <= epsilon:
+    noise_status = "NOISY" if noisy_candidate_count else "ok"
+    if len(deltas) >= min_samples and ucb95 is not None and ucb95 <= epsilon:
         reason = "convergence_proven"
-        noise_status = "ok"
     elif consecutive_no_accepted >= stall_limit or len(relevant) >= max_iterations:
         reason = "budget_stop"
-        noise_status = "ok"
     else:
         reason = None
-        noise_status = "ok"
 
     if reason is not None and reason not in STOP_REASONS:
         raise ValueError(f"unsupported stop reason: {reason}")
@@ -233,6 +232,7 @@ def classify_stop(
         "ucb95_expected_delta": None if ucb95 is None else round(ucb95, 6),
         "deltas": [round(value, 6) for value in deltas],
         "consecutive_no_accepted": consecutive_no_accepted,
+        "noisy_candidate_count": noisy_candidate_count,
         "last_exit_reason": reason,
         "noise_status": noise_status,
         "supported_stop_reasons": sorted(STOP_REASONS),
@@ -908,6 +908,7 @@ def run_dry_contract_v1(args: argparse.Namespace) -> int:
         "epsilon": None,
         "ucb95_expected_delta": None,
         "noise_status": "ok",
+        "noisy_candidate_count": 0,
         "last_exit_reason": None,
         "latest_report": None,
         "dry_run": True,
@@ -987,6 +988,7 @@ def run_dry_contract_v1(args: argparse.Namespace) -> int:
             "epsilon": metrics["epsilon"],
             "ucb95_expected_delta": metrics["ucb95_expected_delta"],
             "noise_status": metrics["noise_status"],
+            "noisy_candidate_count": metrics["noisy_candidate_count"],
             "last_exit_reason": metrics["last_exit_reason"],
             "supported_stop_reasons": metrics["supported_stop_reasons"],
             "timing_history_path": str(shared_history_path),
