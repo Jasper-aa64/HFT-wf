@@ -204,7 +204,10 @@ def control_distribution_text(control: dict[str, str]) -> str:
 
 
 def convergence_reason_text(state: dict[str, object], noise_status: str) -> str:
-    reason = str(state.get("last_exit_reason") or "unknown")
+    reason = str(state.get("last_exit_reason") or "")
+    batch_continuation = str(state.get("batch_continuation") or "")
+    next_round_action = str(state.get("next_round_action") or "")
+    reason_label = reason or "none"
     sample_floor = "at least 5 measured samples for promotion and 7 for bundle audit"
     if reason == "convergence_proven":
         detail = "Convergence may be claimed only when the minimum sample floor and UCB rule are both satisfied."
@@ -214,13 +217,17 @@ def convergence_reason_text(state: dict[str, object], noise_status: str) -> str:
         detail = "NOISY pauses candidate-level judgment only; it does not replace the global stop reason."
     elif reason.upper() == "NOISY":
         detail = "Legacy NOISY rows should be treated as candidate-level pause state, not as a global stop reason."
-    elif reason == "compare_pass":
-        detail = "Compare passed, but promotion still needs repeated candidate-vs-control timing evidence."
-    elif reason == "compare_failed":
-        detail = "Compare failed, so the batch cannot promote performance changes."
+    elif reason == "remote_failed":
+        detail = "Remote failures stop the batch; the low-level failure reason stays in failure_analysis.json."
+    elif not reason and next_round_action == "continue":
+        detail = (
+            "The batch completed without a global stop reason; the loop should continue to the next round."
+            if batch_continuation == "continue_to_next_round"
+            else "The batch completed and the next round action should be reviewed from the run state."
+        )
     else:
-        detail = "Treat the stop reason as run-state context, not as promotion proof by itself."
-    return f"Convergence reason: `{reason}`. {detail} Sample policy: {sample_floor}."
+        detail = "Treat the run-state reason as context, not as promotion proof by itself."
+    return f"Convergence reason: `{reason_label}`. {detail} Sample policy: {sample_floor}."
 
 
 def find_browser() -> Path | None:
@@ -285,7 +292,10 @@ def build_markdown(
     control_median_ms = control.get("median_ms") or control.get("control_median_ms")
     noise_flag = control.get("noise_flag", "unknown")
     sample_text = control.get("samples_ms") or control.get("samples", "")
-    stop_reason = str(state.get("last_exit_reason") or "unknown")
+    stop_reason = str(state.get("last_exit_reason") or "")
+    stop_reason_text = stop_reason or "none"
+    batch_continuation = str(state.get("batch_continuation") or "")
+    next_round_action = str(state.get("next_round_action") or "")
     epsilon = state.get("epsilon")
     ucb95 = state.get("ucb95_expected_delta")
     noisy_count = state.get("noisy_candidate_count")
@@ -440,7 +450,7 @@ def build_markdown(
             "",
             f"## 6. {SECTION_PLATEAU}",
             "",
-            f"\u505c\u6b62\u539f\u56e0\uff1a`{stop_reason}`\u3002epsilon: `{epsilon}`\uff1bUCB_95(E[delta]): `{ucb95}`\u3002",
+            f"\u8fd0\u884c\u539f\u56e0\uff1a`{stop_reason_text}`\u3002batch_continuation: `{batch_continuation or 'unknown'}`\uff1bnext_round_action: `{next_round_action or 'unknown'}`\u3002epsilon: `{epsilon}`\uff1bUCB_95(E[delta]): `{ucb95}`\u3002",
             noise_status_text,
             convergence_reason,
             sample_policy_text,

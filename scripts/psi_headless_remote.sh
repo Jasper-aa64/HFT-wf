@@ -186,6 +186,7 @@ for child in ("logs", "reports"):
 now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 reason = os.environ["FAILURE_REASON"]
 continue_after = os.environ.get("FAILURE_MODE", "stop") == "continue"
+global_stop_reason = "" if continue_after else "remote_failed"
 sample_policy = {
     "screening_measured_samples": 3,
     "promotion_measured_samples": 5,
@@ -264,6 +265,7 @@ failure_analysis = {
     "recorded_at": now,
     "run_id": os.environ.get("RUN_ID", "headless"),
     "reason": reason,
+    "global_stop_reason": global_stop_reason,
     "analysis_phase": "compare" if reason == "compare_failed" else "run",
     "build_status": os.environ.get("BUILD_STATUS", "unknown"),
     "compare_status": os.environ.get("COMPARE_STATUS", "not_run"),
@@ -273,12 +275,12 @@ failure_analysis = {
     "summary": (
         "Compare failed; record analysis first, then continue to the next round."
         if continue_after and reason == "compare_failed"
-        else "Failure recorded and batch stopped."
+        else f"Remote failure recorded and batch stopped: {reason}."
     ),
 }
 (run_dir / "failure_analysis.json").write_text(json.dumps(failure_analysis, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 with (run_dir / "logs" / "failure_analysis.log").open("w", encoding="utf-8") as handle:
-    for key in ("analysis_status", "recorded_at", "run_id", "reason", "analysis_phase", "build_status", "compare_status", "timing_status", "batch_continuation", "next_round_action", "summary"):
+    for key in ("analysis_status", "recorded_at", "run_id", "reason", "global_stop_reason", "analysis_phase", "build_status", "compare_status", "timing_status", "batch_continuation", "next_round_action", "summary"):
         handle.write(f"{key}={failure_analysis[key]}\n")
 
 state = {
@@ -293,7 +295,7 @@ state = {
     "neutral_count": 0,
     "rejected_count": 0,
     "noise_status": "unknown",
-    "last_exit_reason": reason,
+    "last_exit_reason": global_stop_reason,
     "latest_report": "",
     "dry_run": False,
     "sample_policy": sample_policy,
@@ -315,7 +317,7 @@ state = {
 heartbeat = {
     "updated_at": now,
     "phase": "analysis" if continue_after else "stopped",
-    "current_step": f"{reason}; continue_to_next_round" if continue_after else reason,
+    "current_step": f"{reason}; continue_to_next_round" if continue_after else f"remote_failed:{reason}",
     "pid_or_session": str(os.getpid()),
     "last_log": str((run_dir / "logs" / "failure_analysis.log").resolve()),
 }
@@ -451,12 +453,16 @@ recorded_at = now()
 control_stats = stats_from_ms(control_samples_ms, control_median_ms, control_noise)
 control_median_ms_text = control_stats["median_ms"]
 control_median_seconds = control_stats["median_seconds"]
-last_exit_reason = "compare_pass" if str(compare_rc) == "0" else "compare_failed"
 noise_status = "NOISY" if str(control_noise).upper() == "NOISY" else "ok"
 failure_analysis_path = out_dir / "failure_analysis.json"
 failure_analysis: dict[str, object] = {}
 if failure_analysis_path.exists():
     failure_analysis = json.loads(failure_analysis_path.read_text(encoding="utf-8-sig"))
+last_exit_reason = str(failure_analysis.get("global_stop_reason") or "")
+batch_continuation = str(failure_analysis.get("batch_continuation") or "continue_to_next_round")
+next_round_action = str(failure_analysis.get("next_round_action") or "continue")
+batch_status = "completed"
+run_status = "stopped" if last_exit_reason else "running"
 
 profile_rows = [
     {
@@ -872,7 +878,8 @@ history_rows = history_rows_from_attempt_rows(
 write_history_artifacts(shared_history_out, per_run_history_out, history_rows)
 
 run_state = {
-    "status": "stopped",
+    "status": run_status,
+    "batch_status": batch_status,
     "mode": "headless",
     "run_id": run_id,
     "bundle_id": run_id,
@@ -905,8 +912,8 @@ run_state = {
     "failure_analysis_path": str(failure_analysis_path) if failure_analysis else "",
     "failure_analysis_status": failure_analysis.get("analysis_status", ""),
     "failure_analysis_reason": failure_analysis.get("reason", ""),
-    "batch_continuation": failure_analysis.get("batch_continuation", "completed"),
-    "next_round_action": failure_analysis.get("next_round_action", ""),
+    "batch_continuation": batch_continuation,
+    "next_round_action": next_round_action,
 }
 with (out_dir / "run_state.json").open("w", encoding="utf-8") as handle:
     json.dump(run_state, handle, indent=2, ensure_ascii=False)
@@ -914,8 +921,8 @@ with (out_dir / "run_state.json").open("w", encoding="utf-8") as handle:
 
 heartbeat = {
     "updated_at": recorded_at,
-    "phase": "stopped",
-    "current_step": last_exit_reason,
+    "phase": "batch_complete" if not last_exit_reason else "stopped",
+    "current_step": batch_continuation if not last_exit_reason else last_exit_reason,
     "pid_or_session": str(os.getpid()),
     "last_log": str(out_dir / "summary.txt"),
 }
