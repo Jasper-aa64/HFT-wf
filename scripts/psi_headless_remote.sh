@@ -53,7 +53,7 @@ write_patch_artifacts() {
   local candidate_patch
 
   if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    if git -C "$ROOT" diff --binary HEAD -- . > "$snapshot" 2>/dev/null; then
+    if git -C "$ROOT" -c core.quotePath=false diff --binary HEAD -- . > "$snapshot" 2>/dev/null; then
       :
     else
       printf "git diff snapshot unavailable\n" > "$snapshot"
@@ -68,6 +68,10 @@ write_patch_artifacts() {
   do
     cp -f "$snapshot" "$candidate_patch"
   done
+
+  if grep -q "git diff snapshot unavailable" "$snapshot" 2>/dev/null; then
+    log "WARN patch snapshot unavailable; see patches/patch_manifest.json for changed-file evidence"
+  fi
 
   if [ -f "$RUN_DIR/patch_queue.tsv" ]; then
     awk -F '\t' 'NR==1 { for (i=1; i<=NF; i++) if ($i=="patch_path") col=i; next } col && $col { print $col }' "$RUN_DIR/patch_queue.tsv" |
@@ -374,7 +378,7 @@ write_headless_control_loop() {
   local no_compare_count="$6"
   local compare_rc="$7"
   mkdir -p "$HEADLESS_CONTROL_DIR" "$HEADLESS_CONTROL_DIR/logs" "$HEADLESS_CONTROL_DIR/reports"
-  export HEADLESS_CONTROL_DIR CONTROL_HEAD="$control_head" CONTROL_MEDIAN_MS="$control_median_ms" \
+  export HEADLESS_CONTROL_DIR ROOT="$ROOT" CONTROL_HEAD="$control_head" CONTROL_MEDIAN_MS="$control_median_ms" \
     CONTROL_SAMPLES_MS="$control_samples_ms" CONTROL_SAMPLES_SECONDS="$control_samples_seconds" \
     CONTROL_NOISE="$control_noise" NO_COMPARE_COUNT="$no_compare_count" COMPARE_RC="$compare_rc" RUN_ID SCRIPT_DIR
   python3 - <<'PY'
@@ -385,6 +389,7 @@ import json
 import os
 import shutil
 import statistics
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -407,6 +412,9 @@ def now() -> str:
 
 def format_float(value: float) -> str:
     return f"{value:.3f}"
+
+def parse_float_list(raw: str) -> list[float]:
+    return [float(part) for part in raw.split(",") if part]
 
 def percentile(sorted_values: list[float], pct: float) -> float:
     if not sorted_values:
@@ -468,6 +476,94 @@ def stats_from_ms(samples_ms: list[float], fallback_median_ms: float, noise_flag
         "range_seconds": format_float(range_ms / 1000.0),
         "noise_flag": noise_flag,
     }
+
+def merged_history_stats(rows: list[dict[str, str]], fallback_noise: str) -> dict[str, str]:
+    if not rows:
+        return {}
+    merged_samples: list[float] = []
+    for row in rows:
+        merged_samples.extend(parse_float_list(str(row.get("samples_ms", ""))))
+    fallback_median = float(rows[0].get("median_ms", "0") or 0)
+    noise_flag = str(rows[0].get("noise_flag") or fallback_noise or "ok")
+    return stats_from_ms(merged_samples, fallback_median, noise_flag)
+
+def write_patch_manifest(
+    out_dir: Path,
+    root: Path,
+    patch_queue_rows: list[dict[str, str]],
+) -> dict[str, object]:
+    patch_dir = out_dir / "patches"
+    patch_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_path = patch_dir / "current_worktree.patch"
+    manifest_path = patch_dir / "patch_manifest.json"
+
+    tracked_result = subprocess.run(
+        ["git", "-C", str(root), "diff", "--name-only", "HEAD", "--", "."],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    untracked_result = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "--others", "--exclude-standard"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    status_result = subprocess.run(
+        ["git", "-C", str(root), "status", "--short", "--untracked-files=normal"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    tracked_changed_files = [line.strip() for line in tracked_result.stdout.splitlines() if line.strip()]
+    untracked_files = [line.strip() for line in untracked_result.stdout.splitlines() if line.strip()]
+    status_lines = [line.rstrip() for line in status_result.stdout.splitlines() if line.rstrip()]
+    dirty_files = tracked_changed_files + untracked_files
+    patch_queue_files = sorted(
+        {
+            str(row.get("touched_files") or "").strip()
+            for row in patch_queue_rows
+            if str(row.get("touched_files") or "").strip()
+        }
+    )
+
+    snapshot_status = "captured"
+    snapshot_rc = 0
+    with snapshot_path.open("wb") as handle:
+        snapshot_proc = subprocess.run(
+            ["git", "-C", str(root), "-c", "core.quotePath=false", "diff", "--binary", "HEAD", "--", "."],
+            check=False,
+            stdout=handle,
+            stderr=subprocess.PIPE,
+        )
+        snapshot_rc = snapshot_proc.returncode
+    if snapshot_rc != 0:
+        snapshot_path.write_text("git diff snapshot unavailable\n", encoding="utf-8")
+        snapshot_status = "unavailable"
+
+    dirty_risk = "dirty" if dirty_files or status_lines else "clean"
+    if snapshot_status != "captured":
+        dirty_risk = "evidence_risk"
+
+    manifest: dict[str, object] = {
+        "snapshot_status": snapshot_status,
+        "snapshot_source": "git diff --binary HEAD -- .",
+        "snapshot_rc": snapshot_rc,
+        "dirty_risk": dirty_risk,
+        "changed_files_count": len(dirty_files),
+        "changed_files": dirty_files,
+        "tracked_changed_files": tracked_changed_files,
+        "untracked_files": untracked_files,
+        "status_lines": status_lines,
+        "patch_queue_touched_files": patch_queue_files,
+        "patch_queue_touched_files_count": len(patch_queue_files),
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return manifest
 
 PROMOTION_SAMPLE_FLOOR = 5
 BUNDLE_AUDIT_SAMPLE_FLOOR = 7
@@ -800,6 +896,10 @@ comparison_summary_path = out_dir / "comparison_summary.json"
 accepted_attempt_rows = [row for row in attempt_rows if row.get("verdict") == "accepted"]
 candidate_history_rows = [row for row in history_rows if row.get("kind") != "control"]
 accepted_history_rows = [row for row in candidate_history_rows if row.get("verdict") == "accepted"]
+comparison_candidate_stats = merged_history_stats(accepted_history_rows, control_stats["noise_flag"]) if accepted_history_rows else {}
+comparison_updated_baseline_stats = comparison_candidate_stats if accepted_history_rows else {}
+patch_manifest = write_patch_manifest(out_dir, Path(os.environ["ROOT"]), patch_queue_rows)
+patch_manifest_path = out_dir / "patches" / "patch_manifest.json"
 comparison_summary = {
     "schema": "psi_headless_comparison_summary_v1",
     "run_id": run_id,
@@ -807,6 +907,9 @@ comparison_summary = {
     "host_key": host_key,
     "control_head": control_head,
     "active_gate": "headless remote batch",
+    "control_role": "old_control",
+    "candidate_role": "accepted_candidate" if accepted_attempt_rows else "screening_candidate",
+    "updated_baseline_role": "updated_baseline" if accepted_attempt_rows else "pending",
     "compare_rc": int(compare_rc) if str(compare_rc).isdigit() else compare_rc,
     "compare_result": "pass" if compare_pass else "failed",
     "decision": "accepted" if accepted_attempt_rows else "screening_only",
@@ -823,6 +926,8 @@ comparison_summary = {
         "range_ms": control_stats["range_ms"],
         "noise_flag": control_stats["noise_flag"],
     },
+    "candidate": comparison_candidate_stats,
+    "updated_baseline": comparison_updated_baseline_stats,
     "artifact_paths": {
         "attempts": str(out_dir / "attempts.tsv"),
         "patch_queue": str(out_dir / "patch_queue.tsv"),
@@ -831,14 +936,16 @@ comparison_summary = {
         "timing_history": str(shared_history_out),
         "timing_history_run_copy": str(per_run_history_out),
         "failure_analysis": str(failure_analysis_path) if failure_analysis else "",
+        "patch_manifest": str(patch_manifest_path),
     },
     "notes": (
         "Accepted decisions require compare pass plus same-harness candidate timing history; "
-        "this summary is screening-only unless accepted=true and accepted_history_count is nonzero."
+        "old control, candidate, and updated baseline are recorded separately."
     ),
 }
 comparison_summary_path.write_text(json.dumps(comparison_summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
+comparison_accepted = bool(accepted_attempt_rows)
 run_state = {
     "status": run_status,
     "batch_status": batch_status,
@@ -867,11 +974,18 @@ run_state = {
     "sample_policy": sample_policy,
     "build_status": "pass",
     "compare_status": "pass" if str(compare_rc) == "0" else "failed",
-    "timing_status": "screening_only",
+    "timing_status": "accepted" if comparison_accepted else "screening_only",
+    "comparison_decision": "accepted" if comparison_accepted else "screening_only",
+    "comparison_accepted": comparison_accepted,
     "comparison_summary_path": str(comparison_summary_path),
     "patch_queue_path": str(out_dir / "patch_queue.tsv"),
     "neutral_pool_path": str(out_dir / "neutral_pool.tsv"),
     "retry_conditions_path": str(out_dir / "retry_conditions.tsv"),
+    "patch_manifest_path": str(out_dir / "patches" / "patch_manifest.json"),
+    "patch_snapshot_status": patch_manifest.get("snapshot_status", ""),
+    "patch_dirty_risk": patch_manifest.get("dirty_risk", ""),
+    "patch_changed_files_count": patch_manifest.get("changed_files_count", 0),
+    "patch_changed_files": patch_manifest.get("changed_files", []),
     "failure_analysis_path": str(failure_analysis_path) if failure_analysis else "",
     "failure_analysis_status": failure_analysis.get("analysis_status", ""),
     "failure_analysis_reason": failure_analysis.get("reason", ""),

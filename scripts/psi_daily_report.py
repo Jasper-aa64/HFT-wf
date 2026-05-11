@@ -109,6 +109,14 @@ def format_float(raw: float | None, digits: int = 3) -> str:
     return f"{raw:.{digits}f}"
 
 
+def csv_number_text(raw: object) -> str:
+    if isinstance(raw, list):
+        return ",".join(str(item) for item in raw)
+    if raw is None:
+        return ""
+    return str(raw)
+
+
 def history_group(control_head: str) -> str:
     return f"timing_history_v1|control_head={control_head}|sample_unit=ms"
 
@@ -270,9 +278,11 @@ def build_markdown(
     history_path: Path | None = None,
     run_state: dict[str, object] | None = None,
     failure_analysis: dict[str, object] | None = None,
+    comparison_summary: dict[str, object] | None = None,
 ) -> str:
     state = run_state or {}
     failure_analysis = failure_analysis or {}
+    comparison_summary = comparison_summary or {}
     patch_queue = patch_queue or []
     neutral_pool = neutral_pool or []
     retry_conditions = retry_conditions or []
@@ -304,6 +314,84 @@ def build_markdown(
     control_baseline_text = f"bundle median `{control_median}s`"
     if control_median_ms:
         control_baseline_text = f"bundle median `{control_median_ms}ms` (`{control_median}s`)"
+    comparison_block: list[str] = []
+    if comparison_summary:
+        old_control = comparison_summary.get("control") if isinstance(comparison_summary.get("control"), dict) else {}
+        candidate = comparison_summary.get("candidate") if isinstance(comparison_summary.get("candidate"), dict) else {}
+        updated_baseline = (
+            comparison_summary.get("updated_baseline")
+            if isinstance(comparison_summary.get("updated_baseline"), dict)
+            else {}
+        )
+        if not old_control and (
+            comparison_summary.get("baseline_samples_ms") is not None
+            or comparison_summary.get("baseline_median_ms") is not None
+        ):
+            old_control = {
+                "sample_count": len(comparison_summary.get("baseline_samples_ms") or []),
+                "samples_ms": csv_number_text(comparison_summary.get("baseline_samples_ms")),
+                "median_ms": csv_number_text(comparison_summary.get("baseline_median_ms")),
+                "stdev_ms": "",
+                "range_ms": "",
+                "noise_flag": "",
+            }
+        if not candidate and (
+            comparison_summary.get("candidate_samples_ms") is not None
+            or comparison_summary.get("candidate_median_ms") is not None
+        ):
+            candidate = {
+                "sample_count": len(comparison_summary.get("candidate_samples_ms") or []),
+                "samples_ms": csv_number_text(comparison_summary.get("candidate_samples_ms")),
+                "median_ms": csv_number_text(comparison_summary.get("candidate_median_ms")),
+                "stdev_ms": "",
+                "range_ms": "",
+                "noise_flag": "",
+            }
+        if not updated_baseline and candidate:
+            updated_baseline = dict(candidate)
+        comparison_rows = [
+            {
+                "role": str(comparison_summary.get("control_role") or "old_control"),
+                "sample_count": str(old_control.get("sample_count", "")),
+                "samples_ms": str(old_control.get("samples_ms", "")),
+                "median_ms": str(old_control.get("median_ms", "")),
+                "stdev_ms": str(old_control.get("stdev_ms", "")),
+                "range_ms": str(old_control.get("range_ms", "")),
+                "noise_flag": str(old_control.get("noise_flag", "")),
+            },
+            {
+                "role": str(comparison_summary.get("candidate_role") or "candidate"),
+                "sample_count": str(candidate.get("sample_count", "")),
+                "samples_ms": str(candidate.get("samples_ms", "")),
+                "median_ms": str(candidate.get("median_ms", "")),
+                "stdev_ms": str(candidate.get("stdev_ms", "")),
+                "range_ms": str(candidate.get("range_ms", "")),
+                "noise_flag": str(candidate.get("noise_flag", "")),
+            },
+            {
+                "role": str(comparison_summary.get("updated_baseline_role") or "updated_baseline"),
+                "sample_count": str(updated_baseline.get("sample_count", "")),
+                "samples_ms": str(updated_baseline.get("samples_ms", "")),
+                "median_ms": str(updated_baseline.get("median_ms", "")),
+                "stdev_ms": str(updated_baseline.get("stdev_ms", "")),
+                "range_ms": str(updated_baseline.get("range_ms", "")),
+                "noise_flag": str(updated_baseline.get("noise_flag", "")),
+            },
+        ]
+        comparison_block = [
+            "## Accepted comparison summary",
+            "",
+            f"Decision: `{comparison_summary.get('decision') or comparison_summary.get('verdict', '')}`; "
+            f"accepted: `{comparison_summary.get('accepted', '')}`; "
+            f"compare_result: `{comparison_summary.get('compare_result', '')}`.",
+            "",
+            md_table(
+                comparison_rows,
+                ["role", "sample_count", "samples_ms", "median_ms", "stdev_ms", "range_ms", "noise_flag"],
+            ),
+            "This table separates the previous control distribution, candidate distribution, and updated baseline.",
+            "",
+        ]
 
     history_rows = history_rows or []
     current_context = history_context_from_sources(control, state, history_rows)
@@ -481,6 +569,7 @@ def build_markdown(
             "",
         ]
     )
+    lines.extend(comparison_block)
 
     if patch_queue or neutral_pool or retry_conditions:
         lines.extend(
@@ -768,6 +857,7 @@ def main() -> int:
     neutral_pool = read_optional_tsv(control_dir / "neutral_pool.tsv")
     retry_conditions = read_optional_tsv(control_dir / "retry_conditions.tsv")
     failure_analysis = read_optional_json(control_dir / "failure_analysis.json")
+    comparison_summary = read_optional_json(control_dir / "comparison_summary.json")
     history_candidates = history_path_candidates(control_dir)
     history_rows = read_history_rows(history_candidates)
     shared_history_path = experiment_root_for_path(control_dir) / HISTORY_FILE_NAME
@@ -791,6 +881,7 @@ def main() -> int:
         history_path=history_path if history_rows else None,
         run_state=run_state,
         failure_analysis=failure_analysis,
+        comparison_summary=comparison_summary,
     )
     title = f"{args.date} {TITLE_SUFFIX}"
     report_dir = report_root / args.date
