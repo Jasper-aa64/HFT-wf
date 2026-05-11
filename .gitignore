@@ -36,6 +36,9 @@ __pycache__/
 .venv/
 venv/
 
+# Local scratch scripts (underscore-prefixed)
+scripts/_*.py
+
 # Node
 node_modules/
 .claude/settings.local.json
