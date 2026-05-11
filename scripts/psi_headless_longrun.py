@@ -19,6 +19,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from psi_report_paths import reserve_report_paths
 from psi_timing_history import HISTORY_FIELDNAMES, read_history_rows, upsert_history_rows
 
 
@@ -37,6 +38,7 @@ REQUIRED_BATCH_ARTIFACTS = (
     "run_state.json",
     "heartbeat.json",
     "attempts.tsv",
+    "timing_samples.tsv",
     "timing_history.tsv",
     "reports",
     "patches",
@@ -44,7 +46,6 @@ REQUIRED_BATCH_ARTIFACTS = (
 LATEST_BATCH_MIRRORS = (
     "run_state.json",
     "heartbeat.json",
-    "reports",
     "patches",
 )
 LATEST_BATCH_TABLES = (
@@ -57,6 +58,7 @@ LATEST_BATCH_TABLES = (
 )
 TOP_LEVEL_TSVS = (
     "attempts.tsv",
+    "timing_samples.tsv",
     "profile.tsv",
     "hotspots.tsv",
     "cooldown.tsv",
@@ -67,6 +69,19 @@ TOP_LEVEL_TSVS = (
 )
 DEFAULT_TSV_HEADERS = {
     "attempts.tsv": ["batch_index", "batch_id", "rank", "kind", "target", "verdict"],
+    "timing_samples.tsv": [
+        "batch_index",
+        "batch_id",
+        "label",
+        "mode",
+        "warm_or_cold",
+        "elapsed_ms",
+        "elapsed_seconds",
+        "compat_seconds",
+        "rc",
+        "log_file",
+        "pair_index",
+    ],
     "profile.tsv": ["stage", "total_ms", "count", "avg_ms", "source"],
     "hotspots.tsv": ["rank", "stage", "total_ms", "avg_ms", "count", "score", "notes"],
     "cooldown.tsv": ["target", "status", "cooldown_runs_remaining", "reason", "source_profile", "notes"],
@@ -153,6 +168,7 @@ def sync_latest_artifacts(run_dir: Path, batch_dir: Path) -> dict[str, str]:
     for name in LATEST_BATCH_MIRRORS:
         destination = run_dir / name
         copied[name] = copy_if_exists(batch_dir / name, destination)
+    copied["reports"] = copy_if_exists(batch_dir / "reports", run_dir / "reports" / "latest_batch")
     copied["logs"] = copy_if_exists(batch_dir / "logs", run_dir / "logs" / "latest_batch")
     for name in LATEST_BATCH_TABLES:
         copied[name] = copy_if_exists(batch_dir / name, run_dir / name)
@@ -192,6 +208,7 @@ def upsert_timing_history(target: Path, source: Path, batch_id: str) -> None:
 
 def aggregate_batch_tsvs(run_dir: Path, batch_dir: Path, batch_id: str, batch_index: int) -> None:
     append_attempt_rows(run_dir / "attempts.tsv", batch_dir / "attempts.tsv", batch_id, batch_index)
+    append_prefixed_tsv(run_dir / "timing_samples.tsv", batch_dir / "timing_samples.tsv", batch_id, batch_index)
     upsert_timing_history(run_dir / "timing_history.tsv", batch_dir / "timing_history.tsv", batch_id)
 
 
@@ -242,8 +259,11 @@ def latest_report_path(state: dict[str, Any], batch_dir: Path) -> str:
     report = str(state.get("latest_report") or "")
     if report:
         return report
-    reports = sorted((batch_dir / "reports").glob("**/*.md")) if (batch_dir / "reports").exists() else []
-    return str(reports[-1]) if reports else ""
+    reports = list((batch_dir / "reports").glob("**/*.md")) if (batch_dir / "reports").exists() else []
+    if not reports:
+        return ""
+    latest = max(reports, key=lambda path: (path.stat().st_mtime_ns, path.name))
+    return str(latest)
 
 
 def infer_stop_reason(
@@ -356,9 +376,9 @@ def write_longrun_state(
 
 
 def write_batch_report(run_dir: Path, rows: list[dict[str, Any]]) -> Path:
-    report_dir = run_dir / "reports" / date.today().isoformat()
-    report_dir.mkdir(parents=True, exist_ok=True)
-    path = report_dir / f"{date.today().isoformat()} psi headless longrun report.md"
+    report_date = date.today().isoformat()
+    report_stem = f"{report_date} Psi Headless Long-Run Report"
+    path, _ = reserve_report_paths(run_dir / "reports", report_date, report_stem)
     lines = [
         "# Psi Headless Long-Run Report",
         "",
@@ -522,6 +542,7 @@ def main() -> int:
             for dirname in ("logs", "reports", "patches"):
                 (batch_dir / dirname).mkdir(exist_ok=True)
             write_tsv(batch_dir / "attempts.tsv", [], ["rank", "kind", "target", "verdict"])
+            write_tsv(batch_dir / "timing_samples.tsv", [], DEFAULT_TSV_HEADERS["timing_samples.tsv"])
             write_tsv(batch_dir / "timing_history.tsv", [], ["history_key", "run_id", "kind", "verdict"])
             batch_rc = 0
         else:

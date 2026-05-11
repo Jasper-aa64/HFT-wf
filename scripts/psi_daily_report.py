@@ -19,6 +19,7 @@ import statistics
 from datetime import date
 from pathlib import Path
 
+from psi_report_paths import reserve_report_paths
 from psi_timing_history import (
     experiment_root_for_path,
     history_context_from_sources,
@@ -1192,11 +1193,8 @@ def main() -> int:
     auto_loop_section = render_auto_loop_section(run_state, attempts, neutral_pool, retry_conditions, patch_manifest)
     if auto_loop_section:
         markdown = markdown.rstrip() + "\n\n" + auto_loop_section + "\n"
-    title = f"{args.date} {TITLE_SUFFIX}"
-    report_dir = report_root / args.date
-    report_dir.mkdir(parents=True, exist_ok=True)
-    md_path = report_dir / f"{title}.md"
-    pdf_path = report_dir / f"{title}.pdf"
+    report_stem = f"{args.date} {TITLE_SUFFIX}"
+    md_path, pdf_path = reserve_report_paths(report_root, args.date, report_stem)
     md_path.write_text(markdown, encoding="utf-8", newline="\n")
 
     if not args.no_pdf:

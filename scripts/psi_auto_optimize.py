@@ -953,10 +953,19 @@ def update_heartbeat(run_dir: Path, phase: str, current_step: str) -> None:
     )
 
 
-def report_paths(run_dir: Path, report_date: str) -> tuple[Path, Path]:
-    title = f"{report_date} {TITLE_SUFFIX}"
-    report_dir = run_dir / "reports" / report_date
-    return report_dir / f"{title}.md", report_dir / f"{title}.pdf"
+def parse_report_paths(stdout: str) -> tuple[Path, Path]:
+    md_path: Path | None = None
+    pdf_path: Path | None = None
+    for line in stdout.splitlines():
+        if line.startswith("markdown="):
+            md_path = Path(line.split("=", 1)[1].strip())
+        elif line.startswith("pdf="):
+            pdf_path = Path(line.split("=", 1)[1].strip())
+    if md_path is None:
+        raise RuntimeError("psi_daily_report.py did not print a markdown= path")
+    if pdf_path is None:
+        pdf_path = md_path.with_suffix(".pdf")
+    return md_path, pdf_path
 
 
 def generate_report(run_dir: Path, report_date: str) -> tuple[Path, Path]:
@@ -975,8 +984,15 @@ def generate_report(run_dir: Path, report_date: str) -> tuple[Path, Path]:
         "--image",
         str(run_dir / "charts" / "convergence_decision.png"),
     ]
-    subprocess.run(command, cwd=repo_root(), check=True)
-    md_path, pdf_path = report_paths(run_dir, report_date)
+    completed = subprocess.run(
+        command,
+        cwd=repo_root(),
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    md_path, pdf_path = parse_report_paths(completed.stdout)
     return md_path, pdf_path
 
 
