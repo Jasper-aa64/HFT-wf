@@ -1,24 +1,25 @@
 #!/usr/bin/env bash
 set -u
 
-ROOT="/root/work/Code1/psi-trader-liangjunming"
-ENV_FILE="/root/work/.toolchain/psi-env.sh"
-RUN_ID="headless_psi_$(date +%Y%m%d_%H%M%S)"
-RUN_DIR="$ROOT/headless_runs/$RUN_ID"
-BUILD_DIR="$ROOT/build/linux-relwithdebinfo-boost182"
-RUNNER="$BUILD_DIR/build_x64/RelWithDebInfo/bin/PsiTraderRunner/PsiTraderRunner"
-CONFIG="$ROOT/PsiTraderRunner/config.yaml"
-OUTPUT_DIR="/root/work/Code1/dataset/output"
+ROOT="${ROOT:-/root/work/Code1/psi-trader-liangjunming}"
+ENV_FILE="${ENV_FILE:-/root/work/.toolchain/psi-env.sh}"
+RUN_ID="${RUN_ID:-headless_psi_$(date +%Y%m%d_%H%M%S)}"
+RUN_DIR="${RUN_DIR:-$ROOT/headless_runs/$RUN_ID}"
+BUILD_DIR="${BUILD_DIR:-$ROOT/build/linux-relwithdebinfo-boost182}"
+RUNNER="${RUNNER:-$BUILD_DIR/build_x64/RelWithDebInfo/bin/PsiTraderRunner/PsiTraderRunner}"
+CONFIG="${CONFIG:-$ROOT/PsiTraderRunner/config.yaml}"
+OUTPUT_DIR="${OUTPUT_DIR:-/root/work/Code1/dataset/output}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 REPORT_SCRIPT="${REPORT_SCRIPT:-}"
 REPORT_ROOT="${REPORT_ROOT:-$RUN_DIR/reports}"
 GENERATE_REPORT="${GENERATE_REPORT:-0}"
 HEADLESS_CONTROL_DIR="$RUN_DIR"
 MEASURE_RUNS="${MEASURE_RUNS:-5}"
+CANDIDATE_RUNNER="${CANDIDATE_RUNNER:-}"
 
 mkdir -p "$RUN_DIR"
 mkdir -p "$RUN_DIR/logs" "$RUN_DIR/reports" "$RUN_DIR/patches"
-printf "label\tmode\twarm_or_cold\telapsed_ms\telapsed_seconds\tcompat_seconds\trc\tlog_file\n" > "$RUN_DIR/timing_samples.tsv"
+printf "label\tmode\twarm_or_cold\telapsed_ms\telapsed_seconds\tcompat_seconds\trc\tlog_file\tpair_index\n" > "$RUN_DIR/timing_samples.tsv"
 
 log() {
   echo "[$(date '+%F %T')] $*" | tee -a "$RUN_DIR/summary.txt"
@@ -46,50 +47,6 @@ sync_log_artifacts() {
       cp -f "$RUN_DIR/$name" "$RUN_DIR/logs/$name"
     fi
   done
-}
-
-write_patch_artifacts() {
-  local snapshot="$RUN_DIR/patches/current_worktree.patch"
-  local candidate_patch
-
-  if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    if git -C "$ROOT" -c core.quotePath=false diff --binary HEAD -- . > "$snapshot" 2>/dev/null; then
-      :
-    else
-      printf "git diff snapshot unavailable\n" > "$snapshot"
-    fi
-  else
-    printf "git diff snapshot unavailable\n" > "$snapshot"
-  fi
-
-  for candidate_patch in \
-    "$RUN_DIR/patches/1_diagnostic.patch" \
-    "$RUN_DIR/patches/2_explore.patch"
-  do
-    cp -f "$snapshot" "$candidate_patch"
-  done
-
-  if grep -q "git diff snapshot unavailable" "$snapshot" 2>/dev/null; then
-    log "WARN patch snapshot unavailable; see patches/patch_manifest.json for changed-file evidence"
-  fi
-
-  if [ -f "$RUN_DIR/patch_queue.tsv" ]; then
-    awk -F '\t' 'NR==1 { for (i=1; i<=NF; i++) if ($i=="patch_path") col=i; next } col && $col { print $col }' "$RUN_DIR/patch_queue.tsv" |
-      while IFS= read -r patch_rel; do
-        case "$patch_rel" in
-          ""|/*|*..*) continue ;;
-        esac
-        mkdir -p "$(dirname "$RUN_DIR/$patch_rel")"
-        cp -f "$snapshot" "$RUN_DIR/$patch_rel"
-      done
-  fi
-
-  cat > "$RUN_DIR/patches/README.txt" <<'EOF'
-Patch artifacts for the current headless batch.
-
-- `current_worktree.patch` snapshots the tracked business-repo diff used for this run.
-- Candidate patch files are copied from that snapshot according to `patch_queue.tsv` so queue entries have replayable paths.
-EOF
 }
 
 set_compare() {
@@ -126,6 +83,7 @@ run_runner() {
   local log_file="$2"
   local mode="${3:-no_compare}"
   local warm_or_cold="${4:-measured}"
+  local pair_index="${5:-}"
   local start_ms end_ms rc elapsed_ms elapsed_seconds compat_seconds
   start_ms=$(now_ms)
   (cd "$ROOT/PsiTraderRunner" && "$RUNNER" > "$log_file" 2>&1)
@@ -140,8 +98,34 @@ run_runner() {
     echo "${label}_seconds=$elapsed_seconds"
     echo "${label}_rc=$rc"
   } | tee -a "$RUN_DIR/$label.result"
-  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-    "$label" "$mode" "$warm_or_cold" "$elapsed_ms" "$elapsed_seconds" "$compat_seconds" "$rc" "$log_file" \
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    "$label" "$mode" "$warm_or_cold" "$elapsed_ms" "$elapsed_seconds" "$compat_seconds" "$rc" "$log_file" "$pair_index" \
+    >> "$RUN_DIR/timing_samples.tsv"
+  return "$rc"
+}
+
+run_candidate_runner() {
+  local label="$1"
+  local log_file="$2"
+  local mode="${3:-paired_candidate}"
+  local warm_or_cold="${4:-measured}"
+  local pair_index="${5:-}"
+  local start_ms end_ms rc elapsed_ms elapsed_seconds compat_seconds
+  start_ms=$(now_ms)
+  (cd "$ROOT/PsiTraderRunner" && "$CANDIDATE_RUNNER" > "$log_file" 2>&1)
+  rc=$?
+  end_ms=$(now_ms)
+  elapsed_ms=$((end_ms - start_ms))
+  elapsed_seconds=$(ms_to_seconds "$elapsed_ms")
+  compat_seconds=$(((end_ms / 1000) - (start_ms / 1000)))
+  {
+    echo "$label=$compat_seconds rc=$rc"
+    echo "${label}_ms=$elapsed_ms"
+    echo "${label}_seconds=$elapsed_seconds"
+    echo "${label}_rc=$rc"
+  } | tee -a "$RUN_DIR/$label.result"
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    "$label" "$mode" "$warm_or_cold" "$elapsed_ms" "$elapsed_seconds" "$compat_seconds" "$rc" "$log_file" "$pair_index" \
     >> "$RUN_DIR/timing_samples.tsv"
   return "$rc"
 }
@@ -563,6 +547,16 @@ def write_patch_manifest(
         "patch_queue_touched_files_count": len(patch_queue_files),
     }
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    readme_path = patch_dir / "README.txt"
+    readme_path.write_text(
+        "Patch artifacts for the current headless batch.\n"
+        "\n"
+        "- `current_worktree.patch` snapshots the tracked business-repo diff used for this run.\n"
+        "- Candidate patch files are copied from that snapshot according to `patch_queue.tsv` so queue entries have replayable paths.\n",
+        encoding="utf-8",
+    )
+
     return manifest
 
 PROMOTION_SAMPLE_FLOOR = 5
@@ -642,6 +636,76 @@ with (out_dir / "hotspots.tsv").open("w", encoding="utf-8", newline="") as handl
     writer.writerows(hotspot_rows)
 
 from psi_control_loop import build_attempts  # noqa: E402
+from psi_timing_analysis import (  # noqa: E402
+    PairedTimingEvidence,
+    evidence_fields,
+    summarize_paired_timing,
+)
+
+paired_control_rows: list[tuple[int, float]] = []
+paired_candidate_rows: list[tuple[int, float]] = []
+timing_samples_path = out_dir / "timing_samples.tsv"
+if timing_samples_path.exists():
+    with timing_samples_path.open("r", encoding="utf-8-sig", newline="") as _handle:
+        _reader = csv.DictReader(_handle, delimiter="\t")
+        for _row in _reader:
+            _mode = (_row.get("mode") or "").strip()
+            _rc = (_row.get("rc") or "").strip()
+            _pair_index_raw = (_row.get("pair_index") or "").strip()
+            _elapsed = (_row.get("elapsed_ms") or "").strip()
+            if _rc != "0" or not _pair_index_raw or not _elapsed:
+                continue
+            try:
+                _pair_index = int(_pair_index_raw)
+                _elapsed_ms = float(_elapsed)
+            except (TypeError, ValueError):
+                continue
+            if _mode == "paired_control":
+                paired_control_rows.append((_pair_index, _elapsed_ms))
+            elif _mode == "paired_candidate":
+                paired_candidate_rows.append((_pair_index, _elapsed_ms))
+
+paired_control_rows.sort(key=lambda item: item[0])
+paired_candidate_rows.sort(key=lambda item: item[0])
+_paired_pair_indexes = [pi for pi, _ in paired_control_rows]
+_paired_control_values = [ms for _, ms in paired_control_rows]
+_paired_candidate_values = [ms for _, ms in paired_candidate_rows]
+paired_evidence: PairedTimingEvidence | None = None
+if (
+    _paired_control_values
+    and _paired_candidate_values
+    and len(_paired_control_values) == len(_paired_candidate_values)
+):
+    paired_evidence = summarize_paired_timing(
+        _paired_control_values,
+        _paired_candidate_values,
+        build_pass=True,
+        compare_pass=compare_pass,
+        verdict_context=run_id,
+    )
+
+paired_evidence_by_target: dict[str, PairedTimingEvidence] = {}
+paired_target_label: str = ""
+if paired_evidence is not None:
+    # pre-compute attempt rows (without paired evidence) to discover the first
+    # non-control target so we can key the paired evidence dict by it.
+    _preview_rows = build_attempts(
+        profile_rows,
+        control_head,
+        float(control_median_seconds),
+        control_samples_ms,
+        "ms",
+        "compare pass; evaluate candidate against the run-specific control baseline recorded in attempts.tsv",
+        recorded_at,
+        3.0,
+        1.0,
+    )
+    for _row in _preview_rows:
+        if _row.get("kind") != "control":
+            paired_target_label = str(_row.get("target") or "")
+            break
+    if paired_target_label:
+        paired_evidence_by_target[paired_target_label] = paired_evidence
 
 attempt_rows = build_attempts(
     profile_rows,
@@ -653,59 +717,11 @@ attempt_rows = build_attempts(
     recorded_at,
     3.0,
     1.0,
+    paired_evidence_by_target=paired_evidence_by_target or None,
 )
-attempt_fieldnames = [
-    "rank",
-    "kind",
-    "policy_bucket",
-    "experiment_kind",
-    "target",
-    "stack_members",
-    "stage",
-    "observed_cost_ms",
-    "expected_delta_seconds",
-    "p_owned",
-    "p_safe",
-    "p_gate",
-    "p_local",
-    "cost_attempt_seconds",
-    "uncertainty",
-    "lambda",
-    "score_evidence",
-    "ownership_confidence",
-    "correctness_safety",
-    "locality",
-    "legacy_corl_score",
-    "score",
-    "recorded_at",
-    "sample_count",
-    "samples_ms",
-    "samples",
-    "mean_ms",
-    "mean_seconds",
-    "median_ms",
-    "median_seconds",
-    "mad_ms",
-    "mad_seconds",
-    "iqr_ms",
-    "iqr_seconds",
-    "stdev_ms",
-    "stdev_seconds",
-    "range_ms",
-    "range_seconds",
-    "noise_flag",
-    "verdict",
-    "control_head",
-    "control_median_ms",
-    "control_median_seconds",
-    "delta_ms",
-    "delta_seconds",
-    "acceptance_policy",
-    "evidence_status",
-    "promotion_sample_floor",
-    "bundle_audit_sample_floor",
-    "notes",
-]
+from psi_attempts_schema import ATTEMPTS_FIELDNAMES  # noqa: E402
+
+attempt_fieldnames = ATTEMPTS_FIELDNAMES
 with (out_dir / "attempts.tsv").open("w", encoding="utf-8", newline="") as handle:
     writer = csv.DictWriter(handle, fieldnames=attempt_fieldnames, delimiter="\t", lineterminator="\n")
     writer.writeheader()
@@ -900,6 +916,37 @@ comparison_candidate_stats = merged_history_stats(accepted_history_rows, control
 comparison_updated_baseline_stats = comparison_candidate_stats if accepted_history_rows else {}
 patch_manifest = write_patch_manifest(out_dir, Path(os.environ["ROOT"]), patch_queue_rows)
 patch_manifest_path = out_dir / "patches" / "patch_manifest.json"
+
+# Paired-timing evidence block injected into comparison_summary.json when
+# interleaved A/B samples were collected in this run.
+paired_block: dict[str, object] = {}
+paired_samples_block: list[dict[str, object]] = []
+paired_fields: dict[str, str] = {}
+if paired_evidence is not None:
+    paired_fields = evidence_fields(paired_evidence)
+    for idx, pair_index in enumerate(_paired_pair_indexes):
+        control_ms = _paired_control_values[idx]
+        candidate_ms = _paired_candidate_values[idx]
+        paired_samples_block.append(
+            {
+                "pair_index": pair_index,
+                "control_ms": control_ms,
+                "candidate_ms": candidate_ms,
+                "delta_ms": control_ms - candidate_ms,
+            }
+        )
+    paired_block = {
+        "paired_sample_count": paired_evidence.paired_sample_count,
+        "paired_deltas_ms": paired_fields.get("paired_deltas_ms", ""),
+        "median_delta_ms": paired_fields.get("median_delta_ms", ""),
+        "paired_stdev_ms": paired_fields.get("paired_stdev_ms", ""),
+        "paired_range_ms": paired_fields.get("paired_range_ms", ""),
+        "permutation_p_value": paired_fields.get("permutation_p_value", ""),
+        "bootstrap_ci_low_ms": paired_fields.get("bootstrap_ci_low_ms", ""),
+        "bootstrap_ci_high_ms": paired_fields.get("bootstrap_ci_high_ms", ""),
+        "noise_flag": paired_evidence.noise_flag,
+    }
+
 comparison_summary = {
     "schema": "psi_headless_comparison_summary_v1",
     "run_id": run_id,
@@ -943,9 +990,25 @@ comparison_summary = {
         "old control, candidate, and updated baseline are recorded separately."
     ),
 }
+if paired_evidence is not None:
+    comparison_summary["timing_verdict"] = paired_evidence.verdict
+    comparison_summary["timing_verdict_reason"] = paired_evidence.reason
+    comparison_summary["timing_verdict_method"] = paired_evidence.verdict_method
+    comparison_summary["median_delta_ms"] = paired_fields.get("median_delta_ms", "")
+    comparison_summary["bootstrap_ci_low_ms"] = paired_fields.get("bootstrap_ci_low_ms", "")
+    comparison_summary["bootstrap_ci_high_ms"] = paired_fields.get("bootstrap_ci_high_ms", "")
+    comparison_summary["permutation_p_value"] = paired_fields.get("permutation_p_value", "")
+    comparison_summary["paired_samples"] = paired_samples_block
+    comparison_summary["paired"] = paired_block
+    paired_accepted = paired_evidence.verdict == "accepted" and compare_pass
+    comparison_summary["decision"] = paired_evidence.verdict if paired_accepted else (
+        "accepted" if accepted_attempt_rows else paired_evidence.verdict
+    )
+    comparison_summary["accepted"] = bool(paired_accepted)
+
 comparison_summary_path.write_text(json.dumps(comparison_summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
-comparison_accepted = bool(accepted_attempt_rows)
+comparison_accepted = bool(comparison_summary.get("accepted"))
 run_state = {
     "status": run_status,
     "batch_status": batch_status,
@@ -1106,6 +1169,25 @@ if [ "$compare_rc" -ne 0 ]; then
   write_failure_state "compare_failed" "pass" "failed" "screening_only" "continue"
 fi
 
+if [ -n "$CANDIDATE_RUNNER" ]; then
+  if [ -x "$CANDIDATE_RUNNER" ]; then
+    log "running interleaved paired A/B (control=$RUNNER, candidate=$CANDIDATE_RUNNER)"
+    set_compare false
+    for pair_index in $(seq 1 "$MEASURE_RUNS"); do
+      paired_ctrl_label="paired_ctrl_$pair_index"
+      paired_cand_label="paired_cand_$pair_index"
+      if ! run_runner "$paired_ctrl_label" "$RUN_DIR/$paired_ctrl_label.log" "paired_control" "measured" "$pair_index"; then
+        log "WARN paired_control rc!=0 at pair_index=$pair_index"
+      fi
+      if ! run_candidate_runner "$paired_cand_label" "$RUN_DIR/$paired_cand_label.log" "paired_candidate" "measured" "$pair_index"; then
+        log "WARN paired_candidate rc!=0 at pair_index=$pair_index"
+      fi
+    done
+  else
+    log "WARN CANDIDATE_RUNNER set but not executable: $CANDIDATE_RUNNER; skipping paired A/B"
+  fi
+fi
+
 control_head="${CONTROL_HEAD:-}"
 if [ -z "$control_head" ]; then
   control_head=$(cd "$ROOT" && git rev-parse --short HEAD 2>/dev/null || echo "headless_psi_remote")
@@ -1147,8 +1229,6 @@ PY
 else
   log "report_generation=skipped set GENERATE_REPORT=1 REPORT_SCRIPT=/path/to/psi_daily_report.py to enable"
 fi
-
-write_patch_artifacts
 
 log "running perf evidence"
 set_compare false

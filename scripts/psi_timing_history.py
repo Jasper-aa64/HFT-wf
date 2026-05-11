@@ -52,6 +52,26 @@ HISTORY_FIELDNAMES = [
     "range_seconds",
     "delta_ms",
     "delta_seconds",
+    "timing_verdict",
+    "timing_verdict_reason",
+    "timing_verdict_method",
+    "control_sample_count",
+    "candidate_sample_count",
+    "paired_sample_count",
+    "control_samples_ms",
+    "candidate_samples_ms",
+    "paired_deltas_ms",
+    "paired_deltas_seconds",
+    "median_delta_ms",
+    "median_delta_seconds",
+    "bootstrap_ci_low_ms",
+    "bootstrap_ci_high_ms",
+    "bootstrap_ci_low_seconds",
+    "bootstrap_ci_high_seconds",
+    "permutation_p_value",
+    "paired_stdev_ms",
+    "paired_range_ms",
+    "paired_mean_ms",
     "noise_flag",
     "verdict",
     "notes",
@@ -83,6 +103,13 @@ HISTORY_TABLE_COLUMN_PRIORITY = [
     "stdev_ms",
     "range_ms",
     "delta_ms",
+    "timing_verdict",
+    "timing_verdict_reason",
+    "paired_sample_count",
+    "median_delta_ms",
+    "bootstrap_ci_low_ms",
+    "bootstrap_ci_high_ms",
+    "permutation_p_value",
     "noise_flag",
     "verdict",
     "notes",
@@ -489,6 +516,26 @@ def normalize_history_row(
     normalized["verdict"] = normalized.get("verdict", "")
     normalized["delta_ms"] = normalized.get("delta_ms", "")
     normalized["delta_seconds"] = normalized.get("delta_seconds", "")
+    normalized["timing_verdict"] = normalized.get("timing_verdict", "")
+    normalized["timing_verdict_reason"] = normalized.get("timing_verdict_reason", "")
+    normalized["timing_verdict_method"] = normalized.get("timing_verdict_method", "")
+    normalized["control_sample_count"] = normalized.get("control_sample_count", "")
+    normalized["candidate_sample_count"] = normalized.get("candidate_sample_count", "")
+    normalized["paired_sample_count"] = normalized.get("paired_sample_count", "")
+    normalized["control_samples_ms"] = normalized.get("control_samples_ms", "")
+    normalized["candidate_samples_ms"] = normalized.get("candidate_samples_ms", "")
+    normalized["paired_deltas_ms"] = normalized.get("paired_deltas_ms", "")
+    normalized["paired_deltas_seconds"] = normalized.get("paired_deltas_seconds", "")
+    normalized["median_delta_ms"] = normalized.get("median_delta_ms", "")
+    normalized["median_delta_seconds"] = normalized.get("median_delta_seconds", "")
+    normalized["bootstrap_ci_low_ms"] = normalized.get("bootstrap_ci_low_ms", "")
+    normalized["bootstrap_ci_high_ms"] = normalized.get("bootstrap_ci_high_ms", "")
+    normalized["bootstrap_ci_low_seconds"] = normalized.get("bootstrap_ci_low_seconds", "")
+    normalized["bootstrap_ci_high_seconds"] = normalized.get("bootstrap_ci_high_seconds", "")
+    normalized["permutation_p_value"] = normalized.get("permutation_p_value", "")
+    normalized["paired_stdev_ms"] = normalized.get("paired_stdev_ms", "")
+    normalized["paired_range_ms"] = normalized.get("paired_range_ms", "")
+    normalized["paired_mean_ms"] = normalized.get("paired_mean_ms", "")
     normalized["noise_flag"] = normalized.get("noise_flag", "")
     for key in HISTORY_FIELDNAMES:
         normalized.setdefault(key, "")
@@ -548,6 +595,26 @@ def history_rows_from_attempt_rows(
             "range_seconds": clean_text(attempt.get("range_seconds")),
             "delta_ms": clean_text(attempt.get("delta_ms")),
             "delta_seconds": clean_text(attempt.get("delta_seconds")),
+            "timing_verdict": clean_text(attempt.get("timing_verdict")),
+            "timing_verdict_reason": clean_text(attempt.get("timing_verdict_reason")),
+            "timing_verdict_method": clean_text(attempt.get("timing_verdict_method")),
+            "control_sample_count": clean_text(attempt.get("control_sample_count")),
+            "candidate_sample_count": clean_text(attempt.get("candidate_sample_count")),
+            "paired_sample_count": clean_text(attempt.get("paired_sample_count")),
+            "control_samples_ms": clean_text(attempt.get("control_samples_ms")),
+            "candidate_samples_ms": clean_text(attempt.get("candidate_samples_ms")),
+            "paired_deltas_ms": clean_text(attempt.get("paired_deltas_ms")),
+            "paired_deltas_seconds": clean_text(attempt.get("paired_deltas_seconds")),
+            "median_delta_ms": clean_text(attempt.get("median_delta_ms")),
+            "median_delta_seconds": clean_text(attempt.get("median_delta_seconds")),
+            "bootstrap_ci_low_ms": clean_text(attempt.get("bootstrap_ci_low_ms")),
+            "bootstrap_ci_high_ms": clean_text(attempt.get("bootstrap_ci_high_ms")),
+            "bootstrap_ci_low_seconds": clean_text(attempt.get("bootstrap_ci_low_seconds")),
+            "bootstrap_ci_high_seconds": clean_text(attempt.get("bootstrap_ci_high_seconds")),
+            "permutation_p_value": clean_text(attempt.get("permutation_p_value")),
+            "paired_stdev_ms": clean_text(attempt.get("paired_stdev_ms")),
+            "paired_range_ms": clean_text(attempt.get("paired_range_ms")),
+            "paired_mean_ms": clean_text(attempt.get("paired_mean_ms")),
             "noise_flag": clean_text(attempt.get("noise_flag")) or clean_text(default_noise_flag),
             "verdict": clean_text(attempt.get("verdict")),
             "notes": clean_text(attempt.get("notes")),

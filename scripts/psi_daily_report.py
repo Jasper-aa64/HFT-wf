@@ -133,6 +133,9 @@ def timing_columns(rows: list[dict[str, str]]) -> list[str]:
     if any_value(rows, "samples_ms"):
         columns.append("samples_ms")
     columns.append("samples")
+    for field in ("control_samples_ms", "candidate_samples_ms", "paired_deltas_ms"):
+        if any_value(rows, field):
+            columns.append(field)
     for metric in ("mean", "median", "mad", "iqr", "stdev", "range"):
         ms_column = f"{metric}_ms"
         seconds_column = f"{metric}_seconds"
@@ -146,13 +149,27 @@ def convergence_columns(rows: list[dict[str, str]]) -> list[str]:
     columns = ["rank", "kind", "policy_bucket", "target", "verdict"]
     if any_value(rows, "sample_count"):
         columns.append("sample_count")
-    for metric in ("delta", "median", "mad", "iqr", "stdev", "range"):
+    for field in (
+        "timing_verdict",
+        "timing_verdict_reason",
+        "control_sample_count",
+        "candidate_sample_count",
+        "paired_sample_count",
+        "control_samples_ms",
+        "candidate_samples_ms",
+        "paired_deltas_ms",
+    ):
+        if any_value(rows, field):
+            columns.append(field)
+    for metric in ("delta", "median", "median_delta", "bootstrap_ci_low", "bootstrap_ci_high", "mad", "iqr", "stdev", "range"):
         ms_column = f"{metric}_ms"
         seconds_column = f"{metric}_seconds"
         if any_value(rows, ms_column):
             columns.append(ms_column)
         if any_value(rows, seconds_column):
             columns.append(seconds_column)
+    if any_value(rows, "permutation_p_value"):
+        columns.append("permutation_p_value")
     columns.extend(["noise_flag", "stop_reason"])
     return columns
 
@@ -221,9 +238,9 @@ def convergence_reason_text(state: dict[str, object], noise_status: str) -> str:
         detail = "Convergence may be claimed only when the minimum sample floor and UCB rule are both satisfied."
     elif reason == "budget_stop":
         detail = "Budget stop means the loop stopped spending attempts; it is not convergence proof."
-    elif noise_status.lower() == "noisy":
-        detail = "NOISY pauses candidate-level judgment only; it does not replace the global stop reason."
-    elif reason.upper() == "NOISY":
+    elif noise_status.lower() in {"noisy", "noisy_pending"}:
+        detail = "NOISY_PENDING pauses candidate-level judgment only; it does not replace the global stop reason."
+    elif reason.upper() in {"NOISY", "NOISY_PENDING"}:
         detail = "Legacy NOISY rows should be treated as candidate-level pause state, not as a global stop reason."
     elif reason == "remote_failed":
         detail = "Remote failures stop the batch; the low-level failure reason stays in failure_analysis.json."
@@ -316,6 +333,11 @@ def build_markdown(
         control_baseline_text = f"bundle median `{control_median_ms}ms` (`{control_median}s`)"
     comparison_block: list[str] = []
     if comparison_summary:
+        def sample_text_from(value: object) -> str:
+            if isinstance(value, list):
+                return ",".join(str(item) for item in value)
+            return "" if value is None else str(value)
+
         old_control = comparison_summary.get("control") if isinstance(comparison_summary.get("control"), dict) else {}
         candidate = comparison_summary.get("candidate") if isinstance(comparison_summary.get("candidate"), dict) else {}
         updated_baseline = (
@@ -323,6 +345,7 @@ def build_markdown(
             if isinstance(comparison_summary.get("updated_baseline"), dict)
             else {}
         )
+        paired = comparison_summary.get("paired") if isinstance(comparison_summary.get("paired"), dict) else {}
         if not old_control and (
             comparison_summary.get("baseline_samples_ms") is not None
             or comparison_summary.get("baseline_median_ms") is not None
@@ -353,7 +376,7 @@ def build_markdown(
             {
                 "role": str(comparison_summary.get("control_role") or "old_control"),
                 "sample_count": str(old_control.get("sample_count", "")),
-                "samples_ms": str(old_control.get("samples_ms", "")),
+                "samples_ms": sample_text_from(old_control.get("samples_ms", "")),
                 "median_ms": str(old_control.get("median_ms", "")),
                 "stdev_ms": str(old_control.get("stdev_ms", "")),
                 "range_ms": str(old_control.get("range_ms", "")),
@@ -362,36 +385,76 @@ def build_markdown(
             {
                 "role": str(comparison_summary.get("candidate_role") or "candidate"),
                 "sample_count": str(candidate.get("sample_count", "")),
-                "samples_ms": str(candidate.get("samples_ms", "")),
+                "samples_ms": sample_text_from(candidate.get("samples_ms", "")),
                 "median_ms": str(candidate.get("median_ms", "")),
                 "stdev_ms": str(candidate.get("stdev_ms", "")),
                 "range_ms": str(candidate.get("range_ms", "")),
                 "noise_flag": str(candidate.get("noise_flag", "")),
             },
             {
+                "role": "paired_delta",
+                "sample_count": str(paired.get("paired_sample_count", "")),
+                "samples_ms": sample_text_from(paired.get("paired_deltas_ms", "")),
+                "median_ms": str(paired.get("median_delta_ms", "")),
+                "stdev_ms": str(paired.get("paired_stdev_ms", "")),
+                "range_ms": str(paired.get("paired_range_ms", "")),
+                "noise_flag": str(paired.get("noise_flag", "")),
+            },
+            {
                 "role": str(comparison_summary.get("updated_baseline_role") or "updated_baseline"),
                 "sample_count": str(updated_baseline.get("sample_count", "")),
-                "samples_ms": str(updated_baseline.get("samples_ms", "")),
+                "samples_ms": sample_text_from(updated_baseline.get("samples_ms", "")),
                 "median_ms": str(updated_baseline.get("median_ms", "")),
                 "stdev_ms": str(updated_baseline.get("stdev_ms", "")),
                 "range_ms": str(updated_baseline.get("range_ms", "")),
                 "noise_flag": str(updated_baseline.get("noise_flag", "")),
             },
         ]
+        paired_samples = comparison_summary.get("paired_samples")
+        paired_rows = paired_samples if isinstance(paired_samples, list) else []
+        timing_verdict = comparison_summary.get("timing_verdict") or comparison_summary.get("decision") or comparison_summary.get("verdict", "")
+        timing_reason = comparison_summary.get("timing_verdict_reason") or comparison_summary.get("verdict_reason") or ""
+        ci_low = paired.get("bootstrap_ci_low_ms") or comparison_summary.get("bootstrap_ci_low_ms", "")
+        ci_high = paired.get("bootstrap_ci_high_ms") or comparison_summary.get("bootstrap_ci_high_ms", "")
+        p_value = paired.get("permutation_p_value") or comparison_summary.get("permutation_p_value", "")
+        median_delta = paired.get("median_delta_ms") or comparison_summary.get("median_delta_ms", "")
         comparison_block = [
-            "## Accepted comparison summary",
+            "## Timing comparison summary",
             "",
+            f"Timing verdict: `{timing_verdict}`; reason: `{timing_reason}`.",
+            (f"Verdict reason: `{timing_reason}`" if timing_reason else ""),
             f"Decision: `{comparison_summary.get('decision') or comparison_summary.get('verdict', '')}`; "
             f"accepted: `{comparison_summary.get('accepted', '')}`; "
             f"compare_result: `{comparison_summary.get('compare_result', '')}`.",
+            f"Median paired delta: `{median_delta}ms`; bootstrap CI: `[{ci_low}, {ci_high}]ms`; permutation p-value: `{p_value}`.",
             "",
             md_table(
                 comparison_rows,
                 ["role", "sample_count", "samples_ms", "median_ms", "stdev_ms", "range_ms", "noise_flag"],
             ),
-            "This table separates the previous control distribution, candidate distribution, and updated baseline.",
+            "Paired delta uses `control_ms - candidate_ms`; positive means the candidate is faster.",
             "",
         ]
+        if paired_rows:
+            comparison_block.extend(
+                [
+                    "Raw paired A/B samples:",
+                    "",
+                    md_table(
+                        [
+                            {
+                                "pair_index": str(row.get("pair_index", "")) if isinstance(row, dict) else "",
+                                "control_ms": str(row.get("control_ms", "")) if isinstance(row, dict) else "",
+                                "candidate_ms": str(row.get("candidate_ms", "")) if isinstance(row, dict) else "",
+                                "delta_ms": str(row.get("delta_ms", "")) if isinstance(row, dict) else "",
+                            }
+                            for row in paired_rows
+                        ],
+                        ["pair_index", "control_ms", "candidate_ms", "delta_ms"],
+                    ),
+                    "",
+                ]
+            )
 
     history_rows = history_rows or []
     current_context = history_context_from_sources(control, state, history_rows)
@@ -454,10 +517,11 @@ def build_markdown(
         f"all compatible-history median `{format_float(history_control_median)}ms`, "
         f"MAD `{format_float(history_control_mad)}ms`, range `{format_float(history_control_range)}ms`."
     )
+    timing_verdict_state = str(state.get("timing_verdict") or state.get("timing_status") or "")
     noise_status_text = (
         f"Noise status: control noise_flag `{noise_flag}`, run_state noise_status `{state.get('noise_status', 'unknown')}`. "
-        f"Noisy candidates paused: `{noisy_count}`. "
-        "NOISY pauses candidate-level judgment; it does not accept, reject, or prove convergence."
+        f"timing verdict `{timing_verdict_state or 'unknown'}`. Noisy candidates paused: `{noisy_count}`. "
+        "NOISY_PENDING pauses candidate-level judgment; it does not accept, reject, or prove convergence."
     )
     convergence_reason = convergence_reason_text(state, str(state.get("noise_status") or noise_flag))
     sample_policy = state.get("sample_policy") if isinstance(state.get("sample_policy"), dict) else {}
@@ -466,7 +530,7 @@ def build_markdown(
         f"screening `{sample_policy.get('screening_measured_samples', 3)}` measured; "
         f"promotion `{sample_policy.get('promotion_measured_samples', 5)}` measured; "
         f"bundle audit `{sample_policy.get('bundle_audit_measured_samples', 7)}` measured. "
-        "Screening rows are not promotion proof."
+        "Screening rows are not promotion proof; paired A/B samples are required for timing acceptance."
     )
     failure_analysis_text = ""
     if failure_analysis:
@@ -805,6 +869,220 @@ def write_pdf(markdown: str, pdf_path: Path, images: list[Path]) -> None:
         validate_pdf(pdf_path, completed.stdout or b"")
 
 
+AUTO_LOOP_CAPABILITY_CHECKLIST = [
+    ("three_lane_candidate_generator", "scripts/psi_candidate_generator.py"),
+    ("patch_queue_manifest", "scripts/psi_patch_queue.py"),
+    ("neutral_pool_tsv", "neutral_pool.tsv"),
+    ("candidate_level_noisy_pending", "retry_conditions.tsv"),
+    ("neutral_stack_builder", "scripts/psi_neutral_stack.py"),
+    ("auto_loop_closed_loop", "scripts/psi_headless_auto_loop.py"),
+    ("status_surface_complete", "run_state.json + heartbeat.json"),
+    ("report_template_extended", "psi_daily_report.py auto-loop section"),
+]
+
+
+def render_auto_loop_section(
+    run_state: dict[str, object],
+    attempts: list[dict[str, str]],
+    neutral_pool: list[dict[str, str]],
+    retry_conditions: list[dict[str, str]],
+    patch_manifest: dict[str, object],
+) -> str:
+    mode = str(run_state.get("mode") or "")
+    if mode != "headless_auto_loop" and not run_state.get("lane_counts"):
+        # nothing to append for non-auto-loop runs
+        return ""
+
+    lane_counts = run_state.get("lane_counts") or {}
+    control_distribution = run_state.get("control_distribution") or {}
+    latest_lane = str(run_state.get("latest_lane") or "")
+    latest_verdict = str(run_state.get("latest_verdict") or "")
+    latest_candidate_id = str(run_state.get("latest_candidate_id") or "")
+    stop_reason = str(run_state.get("last_exit_reason") or "")
+    stop_detail = str(run_state.get("last_exit_detail") or "")
+
+    # 1. harness capability checklist
+    checklist_lines = ["## A. Harness capability checklist", ""]
+    for name, source in AUTO_LOOP_CAPABILITY_CHECKLIST:
+        checklist_lines.append(f"- [x] `{name}` ({source})")
+    checklist_lines.append("")
+
+    # 2. batch list + per-candidate lane / verdict / timing summary
+    batch_table = md_table(
+        attempts,
+        [col for col in (
+            "iteration",
+            "candidate_id",
+            "lane",
+            "target",
+            "sample_count",
+            "control_median_ms",
+            "candidate_median_ms",
+            "delta_ms",
+            "compare_result",
+            "noise_flag",
+            "verdict",
+        ) if any_value(attempts, col)],
+        limit=40,
+    ) if attempts else "no attempts recorded.\n"
+
+    # 3. control distribution + same-host jitter
+    control_text = (
+        "Control distribution (auto-loop refresh): "
+        f"sample_count=`{control_distribution.get('sample_count', '')}`; "
+        f"median_of_medians_ms=`{control_distribution.get('median_of_medians_ms', '')}`; "
+        f"stdev_of_medians_ms=`{control_distribution.get('stdev_of_medians_ms', '')}`; "
+        f"range_ms=`{control_distribution.get('range_ms', '')}`; "
+        f"trusted=`{control_distribution.get('trusted', '')}`."
+    )
+
+    # 4. accepted optimizations
+    accepted_rows = [row for row in attempts if (row.get("verdict") or "").strip() == "accepted"]
+    if accepted_rows:
+        accepted_block = md_table(
+            accepted_rows,
+            ["iteration", "candidate_id", "lane", "target", "delta_ms", "samples_ms", "notes"],
+        )
+    else:
+        accepted_block = "No accepted optimizations in this run.\n"
+
+    # 5. neutral + which stacks they entered
+    neutral_block = md_table(
+        neutral_pool,
+        [col for col in (
+            "candidate_id",
+            "lane",
+            "target",
+            "touched_files",
+            "compare_result",
+            "timing_summary",
+            "semantic_risk",
+            "stack_compatibility",
+            "retry_condition",
+        ) if any_value(neutral_pool, col)],
+        limit=40,
+    ) if neutral_pool else "No neutral candidates retained.\n"
+
+    # 6. rejected candidates + failure category
+    rejected_rows = [row for row in attempts if (row.get("verdict") or "").strip() == "rejected"]
+    rejected_block = md_table(
+        rejected_rows,
+        [col for col in (
+            "iteration",
+            "candidate_id",
+            "lane",
+            "target",
+            "compare_result",
+            "delta_ms",
+            "noise_flag",
+            "retry_condition",
+            "notes",
+        ) if any_value(rejected_rows, col)],
+        limit=40,
+    ) if rejected_rows else "No rejected candidates.\n"
+
+    # 7. NOISY_PENDING candidates with retry_condition
+    noisy_rows = [
+        row
+        for row in attempts
+        if (row.get("verdict") or "").strip() == "NOISY_PENDING"
+    ]
+    noisy_block = md_table(
+        noisy_rows,
+        [col for col in (
+            "iteration",
+            "candidate_id",
+            "lane",
+            "target",
+            "noise_flag",
+            "retry_condition",
+        ) if any_value(noisy_rows, col)],
+        limit=40,
+    ) if noisy_rows else "No NOISY_PENDING candidates.\n"
+
+    # 8. baseline update
+    baseline_text = (
+        "Baseline updated: the accepted candidate median is recorded via timing_history.tsv."
+        if accepted_rows
+        else "Baseline not updated this run."
+    )
+
+    # 9. stop reason
+    stop_block = f"Stop reason: `{stop_reason or 'unknown'}`; detail: `{stop_detail}`."
+
+    # 10. next-step suggestions
+    suggestions: list[str] = []
+    if lane_counts.get("evidence", 0):
+        suggestions.append("Evidence lane still has candidates; run another iteration before widening scope.")
+    if lane_counts.get("insight", 0) and not accepted_rows:
+        suggestions.append("Insight lane is populated; try a narrow Class A / cache-locality experiment.")
+    if neutral_pool and lane_counts.get("combination", 0):
+        suggestions.append("Neutral pool has compatible members; promote a neutral-stack bundle audit next.")
+    if noisy_rows:
+        suggestions.append("NOISY_PENDING rows exist; wait for quieter host window before rerunning those targets.")
+    if not suggestions:
+        suggestions.append("Run another iteration after refreshing the profile snapshot.")
+
+    patch_entries = patch_manifest.get("entries") if isinstance(patch_manifest, dict) else []
+    if not isinstance(patch_entries, list):
+        patch_entries = []
+    patch_status_counts: dict[str, int] = {}
+    for entry in patch_entries:
+        status = str((entry or {}).get("status", ""))
+        patch_status_counts[status] = patch_status_counts.get(status, 0) + 1
+    patch_summary_line = "; ".join(f"{name}=`{count}`" for name, count in sorted(patch_status_counts.items()) if name)
+
+    lines = [
+        "## Z. Psi headless auto-loop summary",
+        "",
+        "\n".join(checklist_lines),
+        f"Active run: `{run_state.get('run_id', '')}`; iterations=`{run_state.get('iteration', 0)}`;"
+        f" latest lane=`{latest_lane}`; latest candidate=`{latest_candidate_id}`;"
+        f" latest verdict=`{latest_verdict}`.",
+        f"Lane counts: evidence=`{lane_counts.get('evidence', 0)}`; "
+        f"insight=`{lane_counts.get('insight', 0)}`; combination=`{lane_counts.get('combination', 0)}`.",
+        f"Patch manifest status counts: {patch_summary_line or 'none'}.",
+        "",
+        "### B. Experiments in this run",
+        "",
+        batch_table,
+        "",
+        "### C. Control distribution",
+        "",
+        control_text,
+        "",
+        "### D. Accepted optimizations",
+        "",
+        accepted_block,
+        "",
+        "### E. Neutral candidates",
+        "",
+        neutral_block,
+        "",
+        "### F. Rejected candidates",
+        "",
+        rejected_block,
+        "",
+        "### G. NOISY_PENDING candidates",
+        "",
+        noisy_block,
+        "",
+        "### H. Baseline",
+        "",
+        baseline_text,
+        "",
+        "### I. Stop reason",
+        "",
+        stop_block,
+        "",
+        "### J. Next-step suggestions",
+        "",
+    ]
+    for suggestion in suggestions:
+        lines.append(f"- {suggestion}")
+    return "\n".join(lines)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate Psi performance optimization Markdown/PDF report.")
     parser.add_argument("--date", default=date.today().isoformat(), help="Report date, YYYY-MM-DD.")
@@ -867,6 +1145,7 @@ def main() -> int:
     )
 
     run_state = read_json(run_state_path) if run_state_path else {}
+    patch_manifest = read_optional_json(control_dir / "patches" / "patch_manifest.json")
     markdown = build_markdown(
         args.date,
         profile,
@@ -883,6 +1162,9 @@ def main() -> int:
         failure_analysis=failure_analysis,
         comparison_summary=comparison_summary,
     )
+    auto_loop_section = render_auto_loop_section(run_state, attempts, neutral_pool, retry_conditions, patch_manifest)
+    if auto_loop_section:
+        markdown = markdown.rstrip() + "\n\n" + auto_loop_section + "\n"
     title = f"{args.date} {TITLE_SUFFIX}"
     report_dir = report_root / args.date
     report_dir.mkdir(parents=True, exist_ok=True)

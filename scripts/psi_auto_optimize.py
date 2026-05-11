@@ -33,6 +33,8 @@ from psi_timing_history import (
     shared_history_path_for_output,
     write_history_artifacts,
 )
+from psi_timing_analysis import evidence_fields, summarize_paired_timing
+from psi_attempts_schema import ATTEMPTS_FIELDNAMES
 
 
 TITLE_SUFFIX = "\u6027\u80fd\u4f18\u5316\u62a5\u544a"
@@ -193,26 +195,34 @@ def classify_stop(
     max_iterations: int,
     min_samples: int = MIN_CONVERGENCE_SAMPLES,
 ) -> dict[str, object]:
-    relevant = [attempt for attempt in attempts if attempt.verdict in {"accepted", "neutral", "rejected"}]
+    evidence_by_rank = {
+        attempt.rank: attempt_timing_evidence(
+            attempt,
+            BUNDLE_AUDIT_SAMPLE_FLOOR if attempt.lane == "combination" else max(min_samples, PROMOTION_SAMPLE_FLOOR),
+        )
+        for attempt in attempts
+    }
+    relevant = [attempt for attempt in attempts if evidence_by_rank[attempt.rank].verdict in {"accepted", "neutral", "rejected", "NOISY_PENDING"}]
     judged_attempts: list[Attempt] = []
     noisy_candidate_count = 0
     for attempt in relevant:
-        if is_noisy(attempt.control_samples, attempt.candidate_samples):
+        evidence = evidence_by_rank[attempt.rank]
+        if evidence.verdict == "NOISY_PENDING":
             noisy_candidate_count += 1
         else:
             judged_attempts.append(attempt)
 
     all_control = [sample for attempt in judged_attempts for sample in attempt.control_samples]
     deltas = [
-        delta_i(statistics.median(attempt.control_samples), statistics.median(attempt.candidate_samples))
+        float(evidence_by_rank[attempt.rank].median_delta_ms) / 1000.0
         for attempt in judged_attempts
-        if attempt.control_samples and attempt.candidate_samples
+        if evidence_by_rank[attempt.rank].median_delta_ms is not None
     ]
     epsilon = epsilon_for(all_control) if all_control else EPSILON_ABS_SECONDS
     ucb95 = ucb95_expected_delta(deltas)
     consecutive_no_accepted = 0
     for attempt in reversed(judged_attempts):
-        if attempt.verdict == "accepted":
+        if evidence_by_rank[attempt.rank].verdict == "accepted":
             break
         consecutive_no_accepted += 1
 
@@ -312,6 +322,17 @@ def evidence_score(total_ms: int, p_owned: float, p_safe: float, p_gate: float, 
 
 def timing_summary_text(sample_count: object, median_ms: object, delta_ms: object, noise_flag: str) -> str:
     return f"sample_count={sample_count}; median_ms={median_ms}; delta_ms={delta_ms}; noise_flag={noise_flag}"
+
+
+def attempt_timing_evidence(attempt: Attempt, required_pairs: int) -> object:
+    return summarize_paired_timing(
+        [sample * 1000.0 for sample in attempt.control_samples],
+        [sample * 1000.0 for sample in attempt.candidate_samples],
+        build_pass=attempt.correctness == "pass",
+        compare_pass=attempt.correctness == "pass",
+        required_pairs=required_pairs,
+        verdict_context=attempt.target,
+    )
 
 
 def write_hotspots(run_dir: Path) -> None:
@@ -435,7 +456,10 @@ def write_attempts(run_dir: Path, attempts: list[Attempt], control_head: str) ->
         stats = sample_stats(attempt.candidate_samples)
         control_median = statistics.median(attempt.control_samples)
         candidate_median = statistics.median(attempt.candidate_samples)
-        noisy = is_noisy(attempt.control_samples, attempt.candidate_samples)
+        required_pairs = BUNDLE_AUDIT_SAMPLE_FLOOR if attempt.lane == "combination" else PROMOTION_SAMPLE_FLOOR
+        evidence = attempt_timing_evidence(attempt, required_pairs)
+        timing_fields = evidence_fields(evidence)
+        noisy = evidence.verdict == "NOISY_PENDING"
         compare_result = "pass" if attempt.correctness == "pass" else "failed"
         candidate_id = f"{attempt.rank:02d}_{safe_token(attempt.target)}"
         patch_path = f"patches/{attempt.rank:02d}_{safe_token(attempt.lane)}.patch"
@@ -443,105 +467,63 @@ def write_attempts(run_dir: Path, attempts: list[Attempt], control_head: str) ->
             stats["sample_count"],
             stats["median_ms"],
             f"{delta_i(control_median, candidate_median) * 1000.0:.3f}",
-            "NOISY" if noisy else "ok",
+            timing_fields["noise_flag"],
         )
-        rows.append(
-            {
-                "rank": attempt.rank,
-                "kind": "candidate",
-                "policy_bucket": attempt.lane,
-                "experiment_kind": "neutral_stack" if attempt.lane == "combination" else "single",
-                "lane": attempt.lane,
-                "target": attempt.target,
-                "stack_members": attempt.target if attempt.lane != "combination" else "handlerData.row_loop|timestamp cache locality",
-                "candidate_id": candidate_id,
-                "patch_path": patch_path,
-                "touched_files": attempt.target if attempt.lane != "combination" else "handlerData.row_loop|timestamp cache locality",
-                "hypothesis": attempt.notes,
-                "compare_result": compare_result,
-                "timing_summary": timing_summary,
-                "semantic_risk": "low" if attempt.verdict != "rejected" else "medium",
-                "stack_compatibility": "stackable" if attempt.lane == "combination" else "single",
-                "retry_condition": "rerun when same-host jitter is below threshold" if noisy else "bundle audit required" if attempt.lane == "combination" else "eligible for stronger evidence run",
-                "sample_unit": "seconds_compat",
-                "warm_or_cold": "measured",
-                "samples_ms": stats["samples_ms"],
-                "samples": stats["samples"],
-                "sample_count": int(stats["sample_count"]),
-                "mean_ms": stats["mean_ms"],
-                "mean_seconds": f"{stats['mean_seconds']:.3f}",
-                "median_ms": stats["median_ms"],
-                "median_seconds": f"{stats['median_seconds']:.3f}",
-                "mad_ms": stats["mad_ms"],
-                "mad_seconds": f"{stats['mad_seconds']:.3f}",
-                "iqr_ms": stats["iqr_ms"],
-                "iqr_seconds": f"{stats['iqr_seconds']:.3f}",
-                "stdev_ms": stats["stdev_ms"],
-                "stdev_seconds": f"{stats['stdev_seconds']:.3f}",
-                "range_ms": stats["range_ms"],
-                "range_seconds": f"{stats['range_seconds']:.3f}",
-                "delta_ms": f"{delta_i(control_median, candidate_median) * 1000.0:.3f}",
-                "delta_seconds": f"{delta_i(control_median, candidate_median):.3f}",
-                "verdict": attempt.verdict,
-                "correctness": attempt.correctness,
-                "noise_flag": "NOISY" if noisy else "ok",
-                "stop_reason": attempt.stop_reason,
-                "acceptance_policy": "compare pass plus same-harness timing; 3 measured samples are screening only",
-                "evidence_status": "NOISY_PENDING" if noisy else "neutral_pool_candidate" if attempt.verdict == "neutral" else attempt.verdict,
-                "promotion_sample_floor": PROMOTION_SAMPLE_FLOOR,
-                "bundle_audit_sample_floor": BUNDLE_AUDIT_SAMPLE_FLOOR,
-                "notes": attempt.notes,
-            }
-        )
+        row = {
+            "rank": attempt.rank,
+            "kind": "candidate",
+            "policy_bucket": attempt.lane,
+            "experiment_kind": "neutral_stack" if attempt.lane == "combination" else "single",
+            "lane": attempt.lane,
+            "target": attempt.target,
+            "stack_members": attempt.target if attempt.lane != "combination" else "handlerData.row_loop|timestamp cache locality",
+            "candidate_id": candidate_id,
+            "patch_path": patch_path,
+            "touched_files": attempt.target if attempt.lane != "combination" else "handlerData.row_loop|timestamp cache locality",
+            "hypothesis": attempt.notes,
+            "compare_result": compare_result,
+            "timing_summary": (
+                f"{timing_summary}; timing_verdict={evidence.verdict}; "
+                f"permutation_p={timing_fields['permutation_p_value']}"
+            ),
+            "semantic_risk": "low" if attempt.verdict != "rejected" else "medium",
+            "stack_compatibility": "stackable" if attempt.lane == "combination" else "single",
+            "retry_condition": "rerun when interleaved paired jitter is below threshold" if noisy else "bundle audit required" if attempt.lane == "combination" else "eligible for stronger paired evidence run",
+            "sample_unit": "seconds_compat",
+            "warm_or_cold": "measured",
+            "samples_ms": stats["samples_ms"],
+            "samples": stats["samples"],
+            "sample_count": int(stats["sample_count"]),
+            "mean_ms": stats["mean_ms"],
+            "mean_seconds": f"{stats['mean_seconds']:.3f}",
+            "median_ms": stats["median_ms"],
+            "median_seconds": f"{stats['median_seconds']:.3f}",
+            "mad_ms": stats["mad_ms"],
+            "mad_seconds": f"{stats['mad_seconds']:.3f}",
+            "iqr_ms": stats["iqr_ms"],
+            "iqr_seconds": f"{stats['iqr_seconds']:.3f}",
+            "stdev_ms": stats["stdev_ms"],
+            "stdev_seconds": f"{stats['stdev_seconds']:.3f}",
+            "range_ms": stats["range_ms"],
+            "range_seconds": f"{stats['range_seconds']:.3f}",
+            "delta_ms": f"{delta_i(control_median, candidate_median) * 1000.0:.3f}",
+            "delta_seconds": f"{delta_i(control_median, candidate_median):.3f}",
+            "verdict": attempt.verdict,
+            "correctness": attempt.correctness,
+            "noise_flag": timing_fields["noise_flag"],
+            "stop_reason": attempt.stop_reason,
+            "acceptance_policy": "compare pass plus interleaved same-harness paired timing",
+            "evidence_status": evidence.verdict if evidence.verdict == "NOISY_PENDING" else "neutral_pool_candidate" if attempt.verdict == "neutral" else attempt.verdict,
+            "promotion_sample_floor": PROMOTION_SAMPLE_FLOOR,
+            "bundle_audit_sample_floor": BUNDLE_AUDIT_SAMPLE_FLOOR,
+            "notes": attempt.notes,
+        }
+        row.update(timing_fields)
+        rows.append(row)
     write_tsv(
         run_dir / "attempts.tsv",
         rows,
-        [
-            "rank",
-            "kind",
-            "policy_bucket",
-            "experiment_kind",
-            "lane",
-            "target",
-            "stack_members",
-            "candidate_id",
-            "patch_path",
-            "touched_files",
-            "hypothesis",
-            "compare_result",
-            "timing_summary",
-            "semantic_risk",
-            "stack_compatibility",
-            "retry_condition",
-            "sample_unit",
-            "warm_or_cold",
-            "samples_ms",
-            "samples",
-            "sample_count",
-            "mean_ms",
-            "mean_seconds",
-            "median_ms",
-            "median_seconds",
-            "mad_ms",
-            "mad_seconds",
-            "iqr_ms",
-            "iqr_seconds",
-            "stdev_ms",
-            "stdev_seconds",
-            "range_ms",
-            "range_seconds",
-            "delta_ms",
-            "delta_seconds",
-            "verdict",
-            "correctness",
-            "noise_flag",
-            "stop_reason",
-            "acceptance_policy",
-            "evidence_status",
-            "promotion_sample_floor",
-            "bundle_audit_sample_floor",
-            "notes",
-        ],
+        ATTEMPTS_FIELDNAMES,
     )
     return rows
 
@@ -580,6 +562,7 @@ def write_patch_queue(run_dir: Path, attempt_rows: list[dict[str, object]]) -> N
             continue
         sample_count = int(row.get("sample_count") or 0)
         verdict = str(row.get("verdict") or "")
+        timing_verdict = str(row.get("timing_verdict") or verdict)
         noisy = str(row.get("noise_flag") or "").upper() == "NOISY"
         experiment_kind = str(row.get("experiment_kind") or "single")
         required_samples = BUNDLE_AUDIT_SAMPLE_FLOOR if experiment_kind == "neutral_stack" else PROMOTION_SAMPLE_FLOOR
@@ -600,20 +583,30 @@ def write_patch_queue(run_dir: Path, attempt_rows: list[dict[str, object]]) -> N
                 "stack_compatibility": row.get("stack_compatibility", ""),
                 "queue_state": (
                     "NOISY_PENDING"
-                    if noisy
+                    if noisy or timing_verdict == "NOISY_PENDING"
                     else "bundle_audit_pending"
                     if experiment_kind == "neutral_stack"
                     else "neutral_pool"
-                    if verdict == "neutral"
+                    if verdict == "neutral" or timing_verdict == "neutral"
                     else "review"
                 ),
                 "build_status": "dry_run",
                 "compare_status": "pass" if row.get("compare_result") == "pass" else "failed",
-                "timing_status": "screening_only",
+                "timing_status": timing_verdict,
+                "timing_verdict_reason": row.get("timing_verdict_reason", ""),
                 "measured_samples": sample_count,
                 "required_samples": required_samples,
-                "retry_condition": row.get("retry_condition", "rerun when same-host jitter is below threshold" if noisy else "bundle audit required" if experiment_kind == "neutral_stack" else "eligible for stronger evidence run"),
-                "cooldown_status": "hold" if noisy else "open",
+                "retry_condition": row.get(
+                    "retry_condition",
+                    (
+                        "rerun when interleaved paired jitter is below threshold"
+                        if noisy or timing_verdict == "NOISY_PENDING"
+                        else "bundle audit required"
+                        if experiment_kind == "neutral_stack"
+                        else "eligible for stronger paired evidence run"
+                    ),
+                ),
+                "cooldown_status": "hold" if noisy or timing_verdict == "NOISY_PENDING" else "open",
                 "notes": row.get("notes", ""),
             }
         )
@@ -638,6 +631,7 @@ def write_patch_queue(run_dir: Path, attempt_rows: list[dict[str, object]]) -> N
             "build_status",
             "compare_status",
             "timing_status",
+            "timing_verdict_reason",
             "measured_samples",
             "required_samples",
             "retry_condition",
@@ -668,12 +662,18 @@ def write_neutral_pool(run_dir: Path, attempts: list[Attempt]) -> None:
                 len(attempt.candidate_samples),
                 f"{statistics.median(attempt.candidate_samples) * 1000.0:.3f}",
                 f"{delta_i(statistics.median(attempt.control_samples), statistics.median(attempt.candidate_samples)) * 1000.0:.3f}",
-                "NOISY" if is_noisy(attempt.control_samples, attempt.candidate_samples) else "ok",
+                "ok",
+            ),
+            **evidence_fields(
+                attempt_timing_evidence(
+                    attempt,
+                    BUNDLE_AUDIT_SAMPLE_FLOOR if attempt.lane == "combination" else PROMOTION_SAMPLE_FLOOR,
+                )
             ),
             "semantic_risk": "low" if attempt.verdict != "rejected" else "medium",
             "stack_compatibility": "stackable" if attempt.lane == "combination" else "single",
             "validation_status": "bundle_audit_pending" if attempt.lane == "combination" else "stackable",
-            "retry_condition": "rerun when same-host jitter is below threshold" if is_noisy(attempt.control_samples, attempt.candidate_samples) else "bundle audit required" if attempt.lane == "combination" else "eligible for stronger evidence run",
+            "retry_condition": "bundle audit required" if attempt.lane == "combination" else "eligible for stronger paired evidence run",
             "notes": "safe neutral evidence retained; promotion still requires stronger same-harness samples",
         }
         for attempt in attempts
@@ -698,6 +698,19 @@ def write_neutral_pool(run_dir: Path, attempts: list[Attempt]) -> None:
             "bundle_audit_sample_floor",
             "aggregate_gain_seconds",
             "timing_summary",
+            "timing_verdict",
+            "timing_verdict_reason",
+            "timing_verdict_method",
+            "control_sample_count",
+            "candidate_sample_count",
+            "paired_sample_count",
+            "control_samples_ms",
+            "candidate_samples_ms",
+            "paired_deltas_ms",
+            "median_delta_ms",
+            "bootstrap_ci_low_ms",
+            "bootstrap_ci_high_ms",
+            "permutation_p_value",
             "semantic_risk",
             "stack_compatibility",
             "validation_status",
@@ -710,19 +723,23 @@ def write_neutral_pool(run_dir: Path, attempts: list[Attempt]) -> None:
 def write_retry_conditions(run_dir: Path, attempts: list[Attempt], metrics: dict[str, object] | None = None) -> None:
     rows: list[dict[str, object]] = []
     for attempt in attempts:
-        noisy = is_noisy(attempt.control_samples, attempt.candidate_samples)
+        evidence = attempt_timing_evidence(
+            attempt,
+            BUNDLE_AUDIT_SAMPLE_FLOOR if attempt.lane == "combination" else PROMOTION_SAMPLE_FLOOR,
+        )
+        noisy = evidence.verdict == "NOISY_PENDING"
         rows.append(
             {
                 "target": attempt.target,
                 "status": "NOISY_PENDING" if noisy else "ready_for_evidence",
-                "noise_flag": "NOISY" if noisy else "ok",
+                "noise_flag": evidence.noise_flag,
                 "retry_after": "next quiet same-host window" if noisy else "after candidate patch is prepared",
                 "required_condition": (
                     f"collect >= {PROMOTION_SAMPLE_FLOOR} measured control and candidate samples; "
                     f">= {BUNDLE_AUDIT_SAMPLE_FLOOR} for neutral-stack bundle audit"
                 ),
                 "last_exit_reason": "" if metrics is None else metrics.get("last_exit_reason", ""),
-                "notes": "NOISY pauses judgment; retry does not imply rejection.",
+                "notes": evidence.reason if noisy else "paired evidence remains eligible for review.",
             }
         )
     write_tsv(
@@ -730,6 +747,89 @@ def write_retry_conditions(run_dir: Path, attempts: list[Attempt], metrics: dict
         rows,
         ["target", "status", "noise_flag", "retry_after", "required_condition", "last_exit_reason", "notes"],
     )
+
+
+def parse_float_list(raw: object) -> list[float]:
+    if raw in (None, ""):
+        return []
+    if isinstance(raw, list):
+        return [float(value) for value in raw]
+    return [float(part.strip()) for part in str(raw).split(",") if part.strip()]
+
+
+def summary_stats_from_ms_text(raw: object) -> dict[str, str]:
+    return sample_statistics_from_ms(parse_float_list(raw))
+
+
+def write_comparison_summary(
+    run_dir: Path,
+    run_id: str,
+    recorded_at: str,
+    attempt_rows: list[dict[str, object]],
+) -> tuple[Path, dict[str, object]]:
+    candidates = [
+        row
+        for row in attempt_rows
+        if row.get("kind") == "candidate" and row.get("timing_verdict")
+    ]
+    selected = next((row for row in candidates if row.get("timing_verdict") == "accepted"), candidates[0] if candidates else {})
+    control_samples_ms = parse_float_list(selected.get("control_samples_ms"))
+    candidate_samples_ms = parse_float_list(selected.get("candidate_samples_ms"))
+    paired_deltas_ms = parse_float_list(selected.get("paired_deltas_ms"))
+    pair_count = min(len(control_samples_ms), len(candidate_samples_ms), len(paired_deltas_ms))
+    paired_samples = [
+        {
+            "pair_index": index + 1,
+            "control_ms": f"{control_samples_ms[index]:.3f}",
+            "candidate_ms": f"{candidate_samples_ms[index]:.3f}",
+            "delta_ms": f"{paired_deltas_ms[index]:.3f}",
+        }
+        for index in range(pair_count)
+    ]
+    timing_verdict = str(selected.get("timing_verdict") or "neutral")
+    summary = {
+        "schema": "psi_headless_comparison_summary_v2",
+        "run_id": run_id,
+        "recorded_at": recorded_at,
+        "control_role": "control",
+        "candidate_role": "candidate",
+        "updated_baseline_role": "updated_baseline" if timing_verdict == "accepted" else "pending",
+        "build_result": "dry_run",
+        "compare_result": "simulated_pass",
+        "decision": timing_verdict,
+        "timing_verdict": timing_verdict,
+        "timing_verdict_reason": str(selected.get("timing_verdict_reason") or ""),
+        "timing_verdict_method": str(selected.get("timing_verdict_method") or ""),
+        "accepted": timing_verdict == "accepted",
+        "control": summary_stats_from_ms_text(selected.get("control_samples_ms")),
+        "candidate": summary_stats_from_ms_text(selected.get("candidate_samples_ms")),
+        "updated_baseline": summary_stats_from_ms_text(selected.get("candidate_samples_ms")) if timing_verdict == "accepted" else {},
+        "paired": {
+            "paired_sample_count": str(selected.get("paired_sample_count") or pair_count),
+            "paired_deltas_ms": str(selected.get("paired_deltas_ms") or ""),
+            "median_delta_ms": str(selected.get("median_delta_ms") or ""),
+            "median_delta_seconds": str(selected.get("median_delta_seconds") or ""),
+            "bootstrap_ci_low_ms": str(selected.get("bootstrap_ci_low_ms") or ""),
+            "bootstrap_ci_high_ms": str(selected.get("bootstrap_ci_high_ms") or ""),
+            "bootstrap_ci_low_seconds": str(selected.get("bootstrap_ci_low_seconds") or ""),
+            "bootstrap_ci_high_seconds": str(selected.get("bootstrap_ci_high_seconds") or ""),
+            "permutation_p_value": str(selected.get("permutation_p_value") or ""),
+            "paired_stdev_ms": str(selected.get("paired_stdev_ms") or ""),
+            "paired_range_ms": str(selected.get("paired_range_ms") or ""),
+            "paired_mean_ms": str(selected.get("paired_mean_ms") or ""),
+            "noise_flag": str(selected.get("noise_flag") or ""),
+        },
+        "paired_samples": paired_samples,
+        "artifact_paths": {
+            "attempts": str(run_dir / "attempts.tsv"),
+            "timing_history_run_copy": str(per_run_history_path(run_dir)),
+            "retry_conditions": str(run_dir / "retry_conditions.tsv"),
+        },
+        "notes": "Paired delta is control_ms - candidate_ms; positive means the candidate is faster.",
+    }
+    path = run_dir / "comparison_summary.json"
+    write_json(path, summary)
+    return path, summary
 
 
 def write_logs_and_patches(run_dir: Path) -> None:
@@ -916,6 +1016,7 @@ def run_dry_contract_v1(args: argparse.Namespace) -> int:
         "compare_status": "simulated_pass",
         "timing_status": "screening_only",
         "sample_policy": SAMPLE_POLICY,
+        "comparison_summary_path": str(run_dir / "comparison_summary.json"),
         "patch_queue_path": str(run_dir / "patch_queue.tsv"),
         "neutral_pool_path": str(run_dir / "neutral_pool.tsv"),
         "retry_conditions_path": str(run_dir / "retry_conditions.tsv"),
@@ -973,6 +1074,7 @@ def run_dry_contract_v1(args: argparse.Namespace) -> int:
 
     metrics = classify_stop(attempts, stall_limit=args.stall_limit, max_iterations=args.max_iterations)
     write_retry_conditions(run_dir, attempts, metrics)
+    comparison_summary_path, comparison_summary = write_comparison_summary(run_dir, run_id, started_at, attempt_rows)
     write_charts(run_dir, attempts, metrics)
     update_heartbeat(run_dir, "charts", "runtime_convergence and convergence_decision written")
 
@@ -995,7 +1097,12 @@ def run_dry_contract_v1(args: argparse.Namespace) -> int:
             "timing_history_run_copy": str(per_run_history_out),
             "build_status": "dry_run",
             "compare_status": "simulated_pass",
-            "timing_status": "screening_only",
+            "timing_status": comparison_summary.get("timing_verdict", "neutral"),
+            "timing_verdict": comparison_summary.get("timing_verdict", "neutral"),
+            "timing_verdict_reason": comparison_summary.get("timing_verdict_reason", ""),
+            "comparison_decision": comparison_summary.get("decision", ""),
+            "comparison_accepted": comparison_summary.get("accepted", False),
+            "comparison_summary_path": str(comparison_summary_path),
             "sample_policy": SAMPLE_POLICY,
             "patch_queue_path": str(run_dir / "patch_queue.tsv"),
             "neutral_pool_path": str(run_dir / "neutral_pool.tsv"),

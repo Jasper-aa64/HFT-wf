@@ -31,6 +31,8 @@ from psi_timing_history import (
     shared_history_path_for_output,
     write_history_artifacts,
 )
+from psi_timing_analysis import PairedTimingEvidence, evidence_fields
+from psi_attempts_schema import ATTEMPTS_FIELDNAMES
 
 
 DEFAULT_ACCEPTANCE_POLICY = (
@@ -646,6 +648,7 @@ def build_attempts(
     recorded_at: str,
     range_threshold: float,
     stdev_threshold: float,
+    paired_evidence_by_target: dict[str, PairedTimingEvidence] | None = None,
 ) -> list[dict[str, str]]:
     candidates = profile_to_candidates(profile_rows)
     exploit_rows = candidates[:2]
@@ -861,59 +864,52 @@ def build_attempts(
         )
         rank += 1
 
+    if paired_evidence_by_target:
+        for row in rows:
+            if row.get("kind") == "control":
+                continue
+            target = row.get("target")
+            if not target or target not in paired_evidence_by_target:
+                continue
+            evidence = paired_evidence_by_target[target]
+            fields = evidence_fields(evidence)
+            for key, value in fields.items():
+                if value in (None, ""):
+                    continue
+                existing = row.get(key, "")
+                if existing in (None, "", "planned", "DIAGNOSTIC_ONLY"):
+                    row[key] = value
+                elif key in {
+                    "timing_verdict",
+                    "timing_verdict_reason",
+                    "timing_verdict_method",
+                    "control_samples_ms",
+                    "candidate_samples_ms",
+                    "paired_deltas_ms",
+                    "paired_deltas_seconds",
+                    "median_delta_ms",
+                    "median_delta_seconds",
+                    "bootstrap_ci_low_ms",
+                    "bootstrap_ci_high_ms",
+                    "bootstrap_ci_low_seconds",
+                    "bootstrap_ci_high_seconds",
+                    "permutation_p_value",
+                    "paired_stdev_ms",
+                    "paired_range_ms",
+                    "paired_mean_ms",
+                    "control_sample_count",
+                    "candidate_sample_count",
+                    "paired_sample_count",
+                }:
+                    row[key] = value
+            row["verdict"] = evidence.verdict
+            row["noise_flag"] = evidence.noise_flag
+
     return rows
 
 
 def write_attempts(attempts_path: Path, rows: list[dict[str, str]]) -> None:
-    fieldnames = [
-        "rank",
-        "kind",
-        "policy_bucket",
-        "experiment_kind",
-        "target",
-        "stack_members",
-        "stage",
-        "observed_cost_ms",
-        "expected_delta_seconds",
-        "p_owned",
-        "p_safe",
-        "p_gate",
-        "p_local",
-        "cost_attempt_seconds",
-        "uncertainty",
-        "lambda",
-        "score_evidence",
-        "ownership_confidence",
-        "correctness_safety",
-        "locality",
-        "legacy_corl_score",
-        "score",
-        "recorded_at",
-        "sample_count",
-        "samples_ms",
-        "samples",
-        "mean_ms",
-        "mean_seconds",
-        "median_ms",
-        "median_seconds",
-        "mad_ms",
-        "mad_seconds",
-        "iqr_ms",
-        "iqr_seconds",
-        "stdev_ms",
-        "stdev_seconds",
-        "range_ms",
-        "range_seconds",
-        "noise_flag",
-        "verdict",
-        "control_head",
-        "control_median_ms",
-        "control_median_seconds",
-        "delta_ms",
-        "delta_seconds",
-        "acceptance_policy",
-        "notes",
-    ]
+    fieldnames = ATTEMPTS_FIELDNAMES
     with attempts_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t", lineterminator="\n")
         writer.writeheader()

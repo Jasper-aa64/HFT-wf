@@ -1,0 +1,105 @@
+"""Unified attempts.tsv schema for the Psi optimization harness.
+
+Three writers (``psi_auto_optimize.py``, ``psi_control_loop.py``, and the
+inline python heredoc in ``psi_headless_remote.sh``) historically carried
+their own field lists. This module exposes a single ``ATTEMPTS_FIELDNAMES``
+list so every writer emits the same header.
+
+The union is ordered by ``psi_auto_optimize.py`` first, then fields that
+only appear in the other two writers are appended in first-seen order.
+``csv.DictWriter`` writes empty strings for missing keys, which is the
+expected behavior for writers that do not populate every column.
+"""
+
+from __future__ import annotations
+
+
+ATTEMPTS_FIELDNAMES: list[str] = [
+    # psi_auto_optimize.py order
+    "rank",
+    "kind",
+    "policy_bucket",
+    "experiment_kind",
+    "lane",
+    "target",
+    "stack_members",
+    "candidate_id",
+    "patch_path",
+    "touched_files",
+    "hypothesis",
+    "compare_result",
+    "timing_summary",
+    "semantic_risk",
+    "stack_compatibility",
+    "retry_condition",
+    "sample_unit",
+    "warm_or_cold",
+    "samples_ms",
+    "samples",
+    "sample_count",
+    "mean_ms",
+    "mean_seconds",
+    "median_ms",
+    "median_seconds",
+    "mad_ms",
+    "mad_seconds",
+    "iqr_ms",
+    "iqr_seconds",
+    "stdev_ms",
+    "stdev_seconds",
+    "range_ms",
+    "range_seconds",
+    "delta_ms",
+    "delta_seconds",
+    "timing_verdict",
+    "timing_verdict_reason",
+    "timing_verdict_method",
+    "control_sample_count",
+    "candidate_sample_count",
+    "paired_sample_count",
+    "control_samples_ms",
+    "candidate_samples_ms",
+    "paired_deltas_ms",
+    "paired_deltas_seconds",
+    "median_delta_ms",
+    "median_delta_seconds",
+    "bootstrap_ci_low_ms",
+    "bootstrap_ci_high_ms",
+    "bootstrap_ci_low_seconds",
+    "bootstrap_ci_high_seconds",
+    "permutation_p_value",
+    "paired_stdev_ms",
+    "paired_range_ms",
+    "paired_mean_ms",
+    "verdict",
+    "correctness",
+    "noise_flag",
+    "stop_reason",
+    "acceptance_policy",
+    "evidence_status",
+    "promotion_sample_floor",
+    "bundle_audit_sample_floor",
+    "notes",
+    # Fields only present in psi_control_loop.py / psi_headless_remote.sh,
+    # in first-seen order.
+    "stage",
+    "observed_cost_ms",
+    "expected_delta_seconds",
+    "p_owned",
+    "p_safe",
+    "p_gate",
+    "p_local",
+    "cost_attempt_seconds",
+    "uncertainty",
+    "lambda",
+    "score_evidence",
+    "ownership_confidence",
+    "correctness_safety",
+    "locality",
+    "legacy_corl_score",
+    "score",
+    "recorded_at",
+    "control_head",
+    "control_median_ms",
+    "control_median_seconds",
+]
