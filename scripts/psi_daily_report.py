@@ -103,6 +103,20 @@ def parse_float(raw: str | None) -> float | None:
         return None
 
 
+def parse_bool(raw: object) -> bool:
+    if raw is True:
+        return True
+    if raw is False or raw in (None, ""):
+        return False
+    if isinstance(raw, str):
+        text = raw.strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+    return bool(raw)
+
+
 def format_float(raw: float | None, digits: int = 3) -> str:
     if raw is None:
         return ""
@@ -202,6 +216,10 @@ def summarize_control(attempts: list[dict[str, str]]) -> dict[str, str]:
 
 def history_columns(rows: list[dict[str, str]]) -> list[str]:
     columns = ["bundle_id", "recorded_at", "kind", "target"]
+    if any_value(rows, "control_median_ms"):
+        columns.append("control_median_ms")
+    if any_value(rows, "control_median_seconds"):
+        columns.append("control_median_seconds")
     for metric in ("median", "mad", "iqr", "stdev", "range", "delta"):
         ms_column = f"{metric}_ms"
         seconds_column = f"{metric}_seconds"
@@ -340,11 +358,7 @@ def build_markdown(
 
         old_control = comparison_summary.get("control") if isinstance(comparison_summary.get("control"), dict) else {}
         candidate = comparison_summary.get("candidate") if isinstance(comparison_summary.get("candidate"), dict) else {}
-        updated_baseline = (
-            comparison_summary.get("updated_baseline")
-            if isinstance(comparison_summary.get("updated_baseline"), dict)
-            else {}
-        )
+        updated_baseline = comparison_summary.get("updated_baseline") if isinstance(comparison_summary.get("updated_baseline"), dict) else {}
         paired = comparison_summary.get("paired") if isinstance(comparison_summary.get("paired"), dict) else {}
         if not old_control and (
             comparison_summary.get("baseline_samples_ms") is not None
@@ -370,7 +384,12 @@ def build_markdown(
                 "range_ms": "",
                 "noise_flag": "",
             }
-        if not updated_baseline and candidate:
+        paired_samples = comparison_summary.get("paired_samples")
+        paired_rows = paired_samples if isinstance(paired_samples, list) else []
+        timing_verdict = comparison_summary.get("timing_verdict") or comparison_summary.get("decision") or comparison_summary.get("verdict", "")
+        timing_reason = comparison_summary.get("timing_verdict_reason") or comparison_summary.get("verdict_reason") or ""
+        accepted = parse_bool(comparison_summary.get("accepted")) or str(timing_verdict).strip() == "accepted"
+        if accepted and not updated_baseline and candidate:
             updated_baseline = dict(candidate)
         comparison_rows = [
             {
@@ -400,28 +419,36 @@ def build_markdown(
                 "range_ms": str(paired.get("paired_range_ms", "")),
                 "noise_flag": str(paired.get("noise_flag", "")),
             },
-            {
-                "role": str(comparison_summary.get("updated_baseline_role") or "updated_baseline"),
-                "sample_count": str(updated_baseline.get("sample_count", "")),
-                "samples_ms": sample_text_from(updated_baseline.get("samples_ms", "")),
-                "median_ms": str(updated_baseline.get("median_ms", "")),
-                "stdev_ms": str(updated_baseline.get("stdev_ms", "")),
-                "range_ms": str(updated_baseline.get("range_ms", "")),
-                "noise_flag": str(updated_baseline.get("noise_flag", "")),
-            },
         ]
-        paired_samples = comparison_summary.get("paired_samples")
-        paired_rows = paired_samples if isinstance(paired_samples, list) else []
-        timing_verdict = comparison_summary.get("timing_verdict") or comparison_summary.get("decision") or comparison_summary.get("verdict", "")
-        timing_reason = comparison_summary.get("timing_verdict_reason") or comparison_summary.get("verdict_reason") or ""
+        if accepted and updated_baseline:
+            comparison_rows.append(
+                {
+                    "role": str(comparison_summary.get("updated_baseline_role") or "updated_baseline"),
+                    "sample_count": str(updated_baseline.get("sample_count", "")),
+                    "samples_ms": sample_text_from(updated_baseline.get("samples_ms", "")),
+                    "median_ms": str(updated_baseline.get("median_ms", "")),
+                    "stdev_ms": str(updated_baseline.get("stdev_ms", "")),
+                    "range_ms": str(updated_baseline.get("range_ms", "")),
+                    "noise_flag": str(updated_baseline.get("noise_flag", "")),
+                }
+            )
         ci_low = paired.get("bootstrap_ci_low_ms") or comparison_summary.get("bootstrap_ci_low_ms", "")
         ci_high = paired.get("bootstrap_ci_high_ms") or comparison_summary.get("bootstrap_ci_high_ms", "")
         p_value = paired.get("permutation_p_value") or comparison_summary.get("permutation_p_value", "")
         median_delta = paired.get("median_delta_ms") or comparison_summary.get("median_delta_ms", "")
+        paired_status = comparison_summary.get("paired_evidence_status") or paired.get("paired_evidence_status", "")
+        paired_reason = comparison_summary.get("paired_evidence_reason") or paired.get("paired_evidence_reason", "")
         comparison_block = [
             "## Timing comparison summary",
             "",
             f"Timing verdict: `{timing_verdict}`; reason: `{timing_reason}`.",
+            "Updated baseline is shown only when the summary is accepted.",
+            (
+                "Missing paired evidence cannot be accepted."
+                if paired_status == "missing"
+                else ""
+            ),
+            (f"Paired evidence status: `{paired_status}`; reason: `{paired_reason}`." if paired_status else ""),
             (f"Verdict reason: `{timing_reason}`" if timing_reason else ""),
             f"Decision: `{comparison_summary.get('decision') or comparison_summary.get('verdict', '')}`; "
             f"accepted: `{comparison_summary.get('accepted', '')}`; "

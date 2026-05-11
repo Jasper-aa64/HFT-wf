@@ -671,6 +671,24 @@ _paired_pair_indexes = [pi for pi, _ in paired_control_rows]
 _paired_control_values = [ms for _, ms in paired_control_rows]
 _paired_candidate_values = [ms for _, ms in paired_candidate_rows]
 paired_evidence: PairedTimingEvidence | None = None
+candidate_runner = os.environ.get("CANDIDATE_RUNNER", "").strip()
+paired_evidence_status = "present"
+paired_evidence_reason = ""
+if not candidate_runner:
+    paired_evidence_status = "missing"
+    paired_evidence_reason = "CANDIDATE_RUNNER was not provided; paired A/B evidence is required for acceptance"
+elif not os.path.isfile(candidate_runner) or not os.access(candidate_runner, os.X_OK):
+    paired_evidence_status = "missing"
+    paired_evidence_reason = f"CANDIDATE_RUNNER is missing or not executable: {candidate_runner}"
+elif not _paired_control_values or not _paired_candidate_values:
+    paired_evidence_status = "missing"
+    paired_evidence_reason = "no successful paired control/candidate timing rows were collected"
+elif len(_paired_control_values) != len(_paired_candidate_values):
+    paired_evidence_status = "missing"
+    paired_evidence_reason = (
+        f"paired row count mismatch: control={len(_paired_control_values)} "
+        f"candidate={len(_paired_candidate_values)}"
+    )
 if (
     _paired_control_values
     and _paired_candidate_values
@@ -683,6 +701,7 @@ if (
         compare_pass=compare_pass,
         verdict_context=run_id,
     )
+    paired_evidence_status = "present"
 
 paired_evidence_by_target: dict[str, PairedTimingEvidence] = {}
 paired_target_label: str = ""
@@ -936,6 +955,8 @@ if paired_evidence is not None:
             }
         )
     paired_block = {
+        "paired_evidence_status": paired_evidence_status,
+        "paired_evidence_reason": paired_evidence_reason,
         "paired_sample_count": paired_evidence.paired_sample_count,
         "paired_deltas_ms": paired_fields.get("paired_deltas_ms", ""),
         "median_delta_ms": paired_fields.get("median_delta_ms", ""),
@@ -959,8 +980,13 @@ comparison_summary = {
     "updated_baseline_role": "updated_baseline" if accepted_attempt_rows else "pending",
     "compare_rc": int(compare_rc) if str(compare_rc).isdigit() else compare_rc,
     "compare_result": "pass" if compare_pass else "failed",
-    "decision": "accepted" if accepted_attempt_rows else "screening_only",
-    "accepted": bool(accepted_attempt_rows),
+    "decision": "needs_paired_evidence" if paired_evidence_status == "missing" else "screening_only",
+    "accepted": False,
+    "paired_evidence_status": paired_evidence_status,
+    "paired_evidence_reason": paired_evidence_reason,
+    "timing_verdict": "needs_paired_evidence" if paired_evidence_status == "missing" else "screening_only",
+    "timing_verdict_reason": paired_evidence_reason if paired_evidence_status == "missing" else "",
+    "timing_verdict_method": "paired_ab_required",
     "accepted_attempt_count": len(accepted_attempt_rows),
     "candidate_history_count": len(candidate_history_rows),
     "accepted_history_count": len(accepted_history_rows),
@@ -1005,10 +1031,32 @@ if paired_evidence is not None:
         "accepted" if accepted_attempt_rows else paired_evidence.verdict
     )
     comparison_summary["accepted"] = bool(paired_accepted)
+else:
+    comparison_summary["decision"] = "needs_paired_evidence" if paired_evidence_status == "missing" else "screening_only"
+    comparison_summary["paired_samples"] = paired_samples_block
+    comparison_summary["paired"] = {
+        "paired_evidence_status": paired_evidence_status,
+        "paired_evidence_reason": paired_evidence_reason,
+        "paired_sample_count": 0,
+    }
 
 comparison_summary_path.write_text(json.dumps(comparison_summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
-comparison_accepted = bool(comparison_summary.get("accepted"))
+comparison_accepted = comparison_summary.get("accepted") is True
+comparison_timing_verdict = str(comparison_summary.get("timing_verdict") or "")
+comparison_decision = str(comparison_summary.get("decision") or "")
+if comparison_accepted:
+    run_state_timing_status = "accepted"
+elif paired_evidence_status == "missing":
+    run_state_timing_status = "needs_paired_evidence"
+elif comparison_timing_verdict and comparison_timing_verdict != "accepted":
+    run_state_timing_status = comparison_timing_verdict
+else:
+    run_state_timing_status = "screening_only"
+if comparison_decision and (comparison_decision != "accepted" or comparison_accepted):
+    run_state_comparison_decision = comparison_decision
+else:
+    run_state_comparison_decision = run_state_timing_status
 run_state = {
     "status": run_status,
     "batch_status": batch_status,
@@ -1037,9 +1085,13 @@ run_state = {
     "sample_policy": sample_policy,
     "build_status": "pass",
     "compare_status": "pass" if str(compare_rc) == "0" else "failed",
-    "timing_status": "accepted" if comparison_accepted else "screening_only",
-    "comparison_decision": "accepted" if comparison_accepted else "screening_only",
+    "timing_status": run_state_timing_status,
+    "comparison_decision": run_state_comparison_decision,
     "comparison_accepted": comparison_accepted,
+    "paired_evidence_status": paired_evidence_status,
+    "paired_evidence_reason": paired_evidence_reason,
+    "timing_verdict": comparison_summary.get("timing_verdict", ""),
+    "timing_verdict_reason": comparison_summary.get("timing_verdict_reason", ""),
     "comparison_summary_path": str(comparison_summary_path),
     "patch_queue_path": str(out_dir / "patch_queue.tsv"),
     "neutral_pool_path": str(out_dir / "neutral_pool.tsv"),
@@ -1087,15 +1139,16 @@ else
 fi
 
 log "waiting for existing PsiTraderRunner processes"
+RUNNER_PROCESS_NAME="$(basename "$RUNNER")"
 for _ in $(seq 1 60); do
-  if pgrep -f "$RUNNER" >/dev/null 2>&1; then
+  if pgrep -x "$RUNNER_PROCESS_NAME" >/dev/null 2>&1; then
     sleep 10
   else
     break
   fi
 done
 
-if pgrep -f "$RUNNER" >/dev/null 2>&1; then
+if pgrep -x "$RUNNER_PROCESS_NAME" >/dev/null 2>&1; then
   log "ERROR existing PsiTraderRunner still running after wait"
   write_failure_state "runner_busy" "not_run" "not_run" "not_run"
   sync_log_artifacts

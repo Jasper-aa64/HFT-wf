@@ -321,10 +321,12 @@ def call_remote_batch(
             "CANDIDATE_TOUCHED_FILES": "|".join(candidate.get("touched_files", [])),
         }
     )
-    for name in ("ROOT", "ENV_FILE", "BUILD_DIR", "RUNNER", "CONFIG", "OUTPUT_DIR"):
+    for name in ("ROOT", "ENV_FILE", "BUILD_DIR", "RUNNER", "CANDIDATE_RUNNER", "CONFIG", "OUTPUT_DIR"):
         value = getattr(args, name.lower(), None)
         if value:
             env[name] = str(value)
+    if args.candidate_runner:
+        env["CANDIDATE_RUNNER"] = str(args.candidate_runner)
 
     script = args.batch_script.resolve()
     with log_path.open("w", encoding="utf-8") as handle:
@@ -599,18 +601,22 @@ def upsert_timing_from_batch(
                 "paired_sample_count": str(min(len(control_samples), len(candidate_samples))),
                 "control_samples_ms": ",".join(f"{v:.3f}" for v in control_samples),
                 "candidate_samples_ms": ",".join(f"{v:.3f}" for v in candidate_samples),
-                "paired_deltas_ms": "",
-                "paired_deltas_seconds": "",
+                "paired_deltas_ms": ",".join(
+                    f"{c - b:.3f}" for c, b in zip(control_samples, candidate_samples, strict=False)
+                ),
+                "paired_deltas_seconds": ",".join(
+                    f"{(c - b) / 1000.0:.3f}" for c, b in zip(control_samples, candidate_samples, strict=False)
+                ),
                 "median_delta_ms": f"{batch_state.get('delta_ms', 0):.3f}",
-                "median_delta_seconds": "",
-                "bootstrap_ci_low_ms": "",
-                "bootstrap_ci_high_ms": "",
+                "median_delta_seconds": f"{float(batch_state.get('delta_ms', 0) or 0.0) / 1000.0:.3f}",
+                "bootstrap_ci_low_ms": f"{batch_state.get('bootstrap_ci_low_ms', '')}",
+                "bootstrap_ci_high_ms": f"{batch_state.get('bootstrap_ci_high_ms', '')}",
                 "bootstrap_ci_low_seconds": "",
                 "bootstrap_ci_high_seconds": "",
-                "permutation_p_value": "",
-                "paired_stdev_ms": "",
-                "paired_range_ms": "",
-                "paired_mean_ms": "",
+                "permutation_p_value": f"{batch_state.get('permutation_p_value', '')}",
+                "paired_stdev_ms": f"{batch_state.get('paired_stdev_ms', '')}",
+                "paired_range_ms": f"{batch_state.get('paired_range_ms', '')}",
+                "paired_mean_ms": f"{batch_state.get('paired_mean_ms', '')}",
                 "noise_flag": batch_state.get("noise_flag", "ok"),
                 "verdict": batch_state.get("timing_status", "") if kind == "candidate" else "",
                 "notes": f"iteration={batch_state.get('iteration', '')}; dry_run={batch_state.get('dry_run', False)}",
@@ -839,6 +845,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--env-file")
     parser.add_argument("--build-dir")
     parser.add_argument("--runner")
+    parser.add_argument("--candidate-runner")
     parser.add_argument("--config")
     parser.add_argument("--output-dir")
     parser.add_argument("--stop-file", help="Stop before the next iteration when this file exists. Defaults to <run-dir>/STOP.")

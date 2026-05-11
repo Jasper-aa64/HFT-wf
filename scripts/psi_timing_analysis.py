@@ -38,6 +38,8 @@ class PairedTimingEvidence:
     paired_sample_count: int
     control_sample_count: int
     candidate_sample_count: int
+    control_median_ms: float | None
+    control_median_seconds: float | None
     median_delta_ms: float | None
     bootstrap_ci_low_ms: float | None
     bootstrap_ci_high_ms: float | None
@@ -225,8 +227,9 @@ def summarize_paired_timing(
     median_delta_ms = float(statistics.median(deltas_ms)) if deltas_ms else None
     paired_mean_ms = float(statistics.mean(deltas_ms)) if deltas_ms else None
     paired_stdev_ms = float(statistics.stdev(deltas_ms)) if len(deltas_ms) > 1 else None
-    paired_range_ms = float(max(deltas_ms) - min(deltas_ms)) if len(deltas_ms) > 1 else (float(deltas_ms[0]) if deltas_ms else None)
+    paired_range_ms = float(max(deltas_ms) - min(deltas_ms)) if len(deltas_ms) > 1 else (0.0 if deltas_ms else None)
     control_median_ms = float(statistics.median(control)) if control else 0.0
+    control_median_seconds = control_median_ms / 1000.0 if control else None
     if control_median_ms > 0.0:
         noise_flag = noise_flag_from_paired(
             deltas_ms,
@@ -264,8 +267,8 @@ def summarize_paired_timing(
     elif noise_flag == "NOISY":
         verdict = "NOISY_PENDING"
         reason = (
-            f"paired jitter is noisy; range={_format_optional_ms(paired_range_ms)}ms, "
-            f"stdev={_format_optional_ms(paired_stdev_ms)}ms."
+            f"paired jitter is noisy against control median {control_median_ms:.3f}ms; "
+            f"range={_format_optional_ms(paired_range_ms)}ms, stdev={_format_optional_ms(paired_stdev_ms)}ms."
         )
     elif pair_count < required_pairs:
         verdict = "neutral"
@@ -283,13 +286,15 @@ def summarize_paired_timing(
     ):
         verdict = "accepted"
         reason = (
-            f"paired median delta={median_delta_ms:.3f}ms with bootstrap CI "
-            f"[{bootstrap_low_ms:.3f}, {bootstrap_high_ms:.3f}]ms and permutation p={p_value:.6f}."
+            f"paired median delta={median_delta_ms:.3f}ms against control median {control_median_ms:.3f}ms "
+            f"with bootstrap CI [{bootstrap_low_ms:.3f}, {bootstrap_high_ms:.3f}]ms and permutation p={p_value:.6f}."
         )
     else:
         verdict = "neutral"
         reason = (
-            f"paired median delta={median_delta_ms:.3f}ms is positive but not yet credible enough for acceptance."
+            f"paired median delta={median_delta_ms:.3f}ms is positive but not yet credible enough for acceptance; "
+            f"bootstrap CI [{_format_optional_ms(bootstrap_low_ms)}, {_format_optional_ms(bootstrap_high_ms)}]ms, "
+            f"p={p_value:.6f}."
         )
 
     return PairedTimingEvidence(
@@ -303,6 +308,8 @@ def summarize_paired_timing(
         paired_sample_count=pair_count,
         control_sample_count=len(control),
         candidate_sample_count=len(candidate),
+        control_median_ms=control_median_ms if control else None,
+        control_median_seconds=control_median_seconds,
         median_delta_ms=median_delta_ms,
         bootstrap_ci_low_ms=bootstrap_low_ms,
         bootstrap_ci_high_ms=bootstrap_high_ms,
@@ -321,6 +328,8 @@ def evidence_fields(evidence: PairedTimingEvidence) -> dict[str, str]:
         "control_sample_count": str(evidence.control_sample_count),
         "candidate_sample_count": str(evidence.candidate_sample_count),
         "paired_sample_count": str(evidence.paired_sample_count),
+        "control_median_ms": _format_optional_ms(evidence.control_median_ms),
+        "control_median_seconds": _format_optional_ms(evidence.control_median_seconds),
         "control_samples_ms": format_samples_ms(evidence.control_samples_ms),
         "candidate_samples_ms": format_samples_ms(evidence.candidate_samples_ms),
         "paired_deltas_ms": format_samples_ms(evidence.paired_deltas_ms),

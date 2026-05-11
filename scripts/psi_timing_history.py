@@ -58,6 +58,8 @@ HISTORY_FIELDNAMES = [
     "control_sample_count",
     "candidate_sample_count",
     "paired_sample_count",
+    "control_median_ms",
+    "control_median_seconds",
     "control_samples_ms",
     "candidate_samples_ms",
     "paired_deltas_ms",
@@ -106,6 +108,8 @@ HISTORY_TABLE_COLUMN_PRIORITY = [
     "timing_verdict",
     "timing_verdict_reason",
     "paired_sample_count",
+    "control_median_ms",
+    "control_median_seconds",
     "median_delta_ms",
     "bootstrap_ci_low_ms",
     "bootstrap_ci_high_ms",
@@ -522,6 +526,8 @@ def normalize_history_row(
     normalized["control_sample_count"] = normalized.get("control_sample_count", "")
     normalized["candidate_sample_count"] = normalized.get("candidate_sample_count", "")
     normalized["paired_sample_count"] = normalized.get("paired_sample_count", "")
+    normalized["control_median_ms"] = normalized.get("control_median_ms", "")
+    normalized["control_median_seconds"] = normalized.get("control_median_seconds", "")
     normalized["control_samples_ms"] = normalized.get("control_samples_ms", "")
     normalized["candidate_samples_ms"] = normalized.get("candidate_samples_ms", "")
     normalized["paired_deltas_ms"] = normalized.get("paired_deltas_ms", "")
@@ -537,6 +543,12 @@ def normalize_history_row(
     normalized["paired_range_ms"] = normalized.get("paired_range_ms", "")
     normalized["paired_mean_ms"] = normalized.get("paired_mean_ms", "")
     normalized["noise_flag"] = normalized.get("noise_flag", "")
+    control_median_ms = parse_float(normalized.get("control_median_ms"))
+    control_median_seconds = parse_float(normalized.get("control_median_seconds"))
+    if control_median_ms is None and control_median_seconds is not None:
+        normalized["control_median_ms"] = f"{control_median_seconds * 1000.0:.3f}"
+    if control_median_seconds is None and control_median_ms is not None:
+        normalized["control_median_seconds"] = f"{control_median_ms / 1000.0:.3f}"
     for key in HISTORY_FIELDNAMES:
         normalized.setdefault(key, "")
     return normalized
@@ -601,6 +613,8 @@ def history_rows_from_attempt_rows(
             "control_sample_count": clean_text(attempt.get("control_sample_count")),
             "candidate_sample_count": clean_text(attempt.get("candidate_sample_count")),
             "paired_sample_count": clean_text(attempt.get("paired_sample_count")),
+            "control_median_ms": clean_text(attempt.get("control_median_ms")),
+            "control_median_seconds": clean_text(attempt.get("control_median_seconds")),
             "control_samples_ms": clean_text(attempt.get("control_samples_ms")),
             "candidate_samples_ms": clean_text(attempt.get("candidate_samples_ms")),
             "paired_deltas_ms": clean_text(attempt.get("paired_deltas_ms")),

@@ -91,6 +91,20 @@ def read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
+def parse_bool(raw: object) -> bool:
+    if raw is True:
+        return True
+    if raw is False or raw in (None, ""):
+        return False
+    if isinstance(raw, str):
+        text = raw.strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+    return bool(raw)
+
+
 def write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -247,7 +261,7 @@ def infer_stop_reason(
 ) -> tuple[str, str]:
     last_exit_reason = str(batch_state.get("last_exit_reason") or "").strip()
     next_round_action = str(batch_state.get("next_round_action") or "").strip()
-    comparison_accepted = bool(batch_state.get("comparison_accepted"))
+    comparison_accepted = parse_bool(batch_state.get("comparison_accepted"))
 
     if returncode != 0 and last_exit_reason:
         return "remote_failed", f"batch exited rc={returncode}; batch reason={last_exit_reason}"
@@ -320,6 +334,12 @@ def write_longrun_state(
         "build_status": batch_state.get("build_status", ""),
         "compare_status": batch_state.get("compare_status", ""),
         "timing_status": batch_state.get("timing_status", ""),
+        "timing_verdict": batch_state.get("timing_verdict", batch_state.get("timing_status", "")),
+        "timing_verdict_reason": batch_state.get("timing_verdict_reason", ""),
+        "comparison_decision": batch_state.get("comparison_decision", ""),
+        "comparison_accepted": parse_bool(batch_state.get("comparison_accepted")),
+        "paired_evidence_status": batch_state.get("paired_evidence_status", ""),
+        "paired_evidence_reason": batch_state.get("paired_evidence_reason", ""),
         "sample_policy": batch_state.get("sample_policy", {}),
         "batch_continuation": batch_state.get("batch_continuation", ""),
         "next_round_action": batch_state.get("next_round_action", ""),
@@ -378,10 +398,12 @@ def run_batch(args: argparse.Namespace, run_dir: Path, batch_index: int) -> tupl
             "MEASURE_RUNS": str(args.measure_runs),
         }
     )
-    for name in ("ROOT", "ENV_FILE", "BUILD_DIR", "RUNNER", "CONFIG", "OUTPUT_DIR"):
+    for name in ("ROOT", "ENV_FILE", "BUILD_DIR", "RUNNER", "CANDIDATE_RUNNER", "CONFIG", "OUTPUT_DIR"):
         value = getattr(args, name.lower())
         if value:
             env[name] = str(value)
+    if args.candidate_runner:
+        env["CANDIDATE_RUNNER"] = str(args.candidate_runner)
 
     script = args.batch_script.resolve()
     log_path = run_dir / "logs" / f"batch_{batch_index:03d}.log"
@@ -416,6 +438,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--env-file")
     parser.add_argument("--build-dir")
     parser.add_argument("--runner")
+    parser.add_argument("--candidate-runner")
     parser.add_argument("--config")
     parser.add_argument("--output-dir")
     parser.add_argument("--stop-file", help="Stop before launching the next batch when this file exists. Defaults to <run-dir>/STOP.")
@@ -523,7 +546,7 @@ def main() -> int:
             repeated_infra_failures=args.repeated_infra_failures,
             first_accepted_stop=args.first_accepted_stop,
         )
-        if batch_state.get("comparison_accepted") and not args.first_accepted_stop and not stop_reason:
+        if parse_bool(batch_state.get("comparison_accepted")) and not args.first_accepted_stop and not stop_reason:
             update_heartbeat(run_dir, "accepted_audit", "accepted artifacts recorded; refreshing candidate selection")
 
         batch_rows.append(
