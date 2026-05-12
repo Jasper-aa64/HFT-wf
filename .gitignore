@@ -28,6 +28,7 @@ cmake-build-*/
 # Psi experiment artifacts
 experiments/
 headless_runs/
+psi_runs/
 
 # Python
 __pycache__/

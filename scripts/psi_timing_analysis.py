@@ -257,6 +257,13 @@ def summarize_paired_timing(
         resamples=permutation_resamples,
         seed_parts=(control, candidate, verdict_context, required_pairs, sample_floor_for_bundle_audit),
     )
+    clear_non_improvement = (
+        pair_count >= required_pairs
+        and median_delta_ms is not None
+        and median_delta_ms <= 0.0
+        and bootstrap_high_ms is not None
+        and bootstrap_high_ms <= 0.0
+    )
 
     if not build_pass:
         verdict = "rejected"
@@ -264,6 +271,14 @@ def summarize_paired_timing(
     elif not compare_pass:
         verdict = "rejected"
         reason = "compare failed; the paired timing evidence is invalid."
+    elif clear_non_improvement:
+        verdict = "rejected"
+        reason = (
+            f"paired evidence shows non-improvement; median delta={median_delta_ms:.3f}ms against "
+            f"control median {control_median_ms:.3f}ms with bootstrap CI "
+            f"[{_format_optional_ms(bootstrap_low_ms)}, {_format_optional_ms(bootstrap_high_ms)}]ms "
+            f"and permutation p={p_value:.6f}."
+        )
     elif noise_flag == "NOISY":
         verdict = "NOISY_PENDING"
         reason = (
