@@ -49,6 +49,30 @@ sync_log_artifacts() {
   done
 }
 
+count_runner_failure_markers() {
+  # PsiRunner can return rc=0 even when benchmark input/compare files are missing.
+  # Treat those log markers as hard gate failures before timing is interpreted.
+  grep -E \
+    "PsiRunner::run file:.*not exists|compareFile is not exists|compareFile error|basic_string|length_error|Aborted|Segmentation fault|terminate called" \
+    "$@" 2>/dev/null | wc -l | awk '{print $1+0}'
+}
+
+stage_runtime_config() {
+  local requested_config="$CONFIG"
+  local runtime_config="$ROOT/PsiTraderRunner/config.yaml"
+  if [ ! -f "$requested_config" ]; then
+    log "ERROR CONFIG missing: $requested_config"
+    write_failure_state "missing_config" "not_run" "not_run" "not_run"
+    sync_log_artifacts
+    exit 1
+  fi
+  if [ "$(readlink -f "$requested_config")" != "$(readlink -f "$runtime_config" 2>/dev/null || echo "$runtime_config")" ]; then
+    cp -f "$requested_config" "$runtime_config"
+    log "staged runtime config from $requested_config to $runtime_config"
+  fi
+  CONFIG="$runtime_config"
+}
+
 set_compare() {
   local value="$1"
   if grep -q "isCompareFile: true" "$CONFIG"; then
@@ -738,6 +762,61 @@ attempt_rows = build_attempts(
     1.0,
     paired_evidence_by_target=paired_evidence_by_target or None,
 )
+if paired_evidence is not None and not paired_evidence_by_target:
+    paired_fields = evidence_fields(paired_evidence)
+    target = os.environ.get("CANDIDATE_TARGET", "").strip() or "candidate_runner"
+    candidate_id = os.environ.get("CANDIDATE_ID", "").strip() or "candidate_runner"
+    lane = os.environ.get("CANDIDATE_LANE", "").strip() or "screening"
+    touched_files = os.environ.get("CANDIDATE_TOUCHED_FILES", "").strip() or target
+    attempt_rows.append(
+        {
+            "rank": str(len(attempt_rows)),
+            "kind": "single",
+            "policy_bucket": lane,
+            "experiment_kind": "single",
+            "lane": lane,
+            "target": target,
+            "stack_members": target,
+            "candidate_id": candidate_id,
+            "patch_path": "patches/current_worktree.patch",
+            "touched_files": touched_files,
+            "hypothesis": "candidate runner paired A/B evidence",
+            "compare_result": "pass" if compare_pass else "failed",
+            "timing_summary": (
+                f"paired_sample_count={paired_evidence.paired_sample_count}; "
+                f"median_delta_ms={paired_fields.get('median_delta_ms', '')}; "
+                f"noise_flag={paired_evidence.noise_flag}"
+            ),
+            "semantic_risk": "unknown",
+            "stack_compatibility": "single",
+            "retry_condition": paired_evidence.reason,
+            "sample_unit": "ms",
+            "warm_or_cold": "measured",
+            "samples_ms": paired_fields.get("candidate_samples_ms", ""),
+            "samples": ",".join(
+                f"{float(value) / 1000.0:g}" for value in paired_evidence.candidate_samples_ms
+            ),
+            "sample_count": str(paired_evidence.candidate_sample_count),
+            "mean_ms": f"{sum(paired_evidence.candidate_samples_ms) / paired_evidence.candidate_sample_count:.3f}"
+            if paired_evidence.candidate_sample_count
+            else "",
+            "median_ms": "",
+            "delta_ms": paired_fields.get("median_delta_ms", ""),
+            "delta_seconds": paired_fields.get("median_delta_seconds", ""),
+            "correctness": "pass" if compare_pass else "failed",
+            "acceptance_policy": "compare pass plus paired bootstrap/permutation evidence",
+            "evidence_status": "paired_present",
+            "promotion_sample_floor": str(PROMOTION_SAMPLE_FLOOR),
+            "bundle_audit_sample_floor": str(BUNDLE_AUDIT_SAMPLE_FLOOR),
+            "notes": paired_evidence.reason,
+            "stage": target,
+            "recorded_at": recorded_at,
+            "control_head": control_head,
+            **paired_fields,
+            "verdict": paired_evidence.verdict,
+            "noise_flag": paired_evidence.noise_flag,
+        }
+    )
 from psi_attempts_schema import ATTEMPTS_FIELDNAMES  # noqa: E402
 
 attempt_fieldnames = ATTEMPTS_FIELDNAMES
@@ -1020,6 +1099,8 @@ if paired_evidence is not None:
     comparison_summary["timing_verdict"] = paired_evidence.verdict
     comparison_summary["timing_verdict_reason"] = paired_evidence.reason
     comparison_summary["timing_verdict_method"] = paired_evidence.verdict_method
+    comparison_summary["paired_sample_count"] = paired_evidence.paired_sample_count
+    comparison_summary["paired_deltas_ms"] = paired_fields.get("paired_deltas_ms", "")
     comparison_summary["median_delta_ms"] = paired_fields.get("median_delta_ms", "")
     comparison_summary["bootstrap_ci_low_ms"] = paired_fields.get("bootstrap_ci_low_ms", "")
     comparison_summary["bootstrap_ci_high_ms"] = paired_fields.get("bootstrap_ci_high_ms", "")
@@ -1033,6 +1114,8 @@ if paired_evidence is not None:
     comparison_summary["accepted"] = bool(paired_accepted)
 else:
     comparison_summary["decision"] = "needs_paired_evidence" if paired_evidence_status == "missing" else "screening_only"
+    comparison_summary["paired_sample_count"] = 0
+    comparison_summary["paired_deltas_ms"] = ""
     comparison_summary["paired_samples"] = paired_samples_block
     comparison_summary["paired"] = {
         "paired_evidence_status": paired_evidence_status,
@@ -1155,6 +1238,7 @@ if pgrep -x "$RUNNER_PROCESS_NAME" >/dev/null 2>&1; then
   exit 1
 fi
 
+stage_runtime_config
 set_compare false
 grep "isCompareFile" "$CONFIG" | tee -a "$RUN_DIR/summary.txt"
 
@@ -1188,6 +1272,14 @@ for label in warmup "${measured_labels[@]}"; do
   fi
   cat "$RUN_DIR/$label.result" >> "$RUN_DIR/current_no_compare.txt"
 done
+no_compare_error_count=$(count_runner_failure_markers "$RUN_DIR"/*.no_compare.log)
+if [ "$no_compare_error_count" -ne 0 ]; then
+  echo "runner_error_grep_count=$no_compare_error_count" | tee -a "$RUN_DIR/current_no_compare.txt"
+  log "ERROR no_compare logs contain runner failure markers; refusing timing verdict"
+  write_failure_state "input_missing_or_runner_error" "pass" "not_run" "failed"
+  sync_log_artifacts
+  exit 1
+fi
 summarize_ms_samples "no_compare" "measured" "measured_no_compare" "$RUN_DIR/current_no_compare.txt"
 no_compare_sample_count=$(awk 'BEGIN { c=0 } NR > 1 && $2=="no_compare" && $3=="measured" && $7=="0" { c++ } END { print c+0 }' "$RUN_DIR/timing_samples.tsv")
 no_compare_median_ms=$(awk -F '\t' 'NR > 1 && $2=="no_compare" && $3=="measured" && $7=="0" { print $4 }' "$RUN_DIR/timing_samples.tsv" | sort -n | awk '{
@@ -1202,18 +1294,39 @@ if [ -z "$no_compare_median_ms" ]; then
 fi
 find "$OUTPUT_DIR" -name "*.parquet" | wc -l | awk '{print "output_parquet_count="$1}' | tee -a "$RUN_DIR/current_no_compare.txt"
 
-log "running current-safe compare"
+log "running candidate compare"
 set_compare true
-if run_runner "compare" "$RUN_DIR/compare.log" "compare" "measured"; then
-  compare_rc=0
+compare_runner_role="control"
+compare_runner_path="$RUNNER"
+if [ -n "$CANDIDATE_RUNNER" ] && [ -x "$CANDIDATE_RUNNER" ]; then
+  compare_runner_role="candidate"
+  compare_runner_path="$CANDIDATE_RUNNER"
+fi
+log "compare runner role=$compare_runner_role path=$compare_runner_path"
+if [ "$compare_runner_role" = "candidate" ]; then
+  if run_candidate_runner "compare" "$RUN_DIR/compare.log" "compare" "measured"; then
+    compare_rc=0
+  else
+    compare_rc=$?
+  fi
 else
-  compare_rc=$?
+  if run_runner "compare" "$RUN_DIR/compare.log" "compare" "measured"; then
+    compare_rc=0
+  else
+    compare_rc=$?
+  fi
 fi
 set_compare false
+compare_log_error_count=$(count_runner_failure_markers "$RUN_DIR/compare.log")
+if [ "$compare_log_error_count" -ne 0 ]; then
+  compare_rc=1
+fi
 {
   cat "$RUN_DIR/compare.result"
+  echo "compare_runner_role=$compare_runner_role"
+  echo "compare_runner_path=$compare_runner_path"
   find "$OUTPUT_DIR" -name "*.parquet" | wc -l | awk '{print "output_parquet_count="$1}'
-  grep -E "compareFile error|basic_string|length_error|Aborted|Segmentation fault|terminate called" "$RUN_DIR/compare.log" | wc -l | awk '{print "compare_error_grep_count="$1}'
+  echo "compare_error_grep_count=$compare_log_error_count"
   echo "compare_rc=$compare_rc"
 } | tee "$RUN_DIR/current_compare.txt"
 
@@ -1222,7 +1335,9 @@ if [ "$compare_rc" -ne 0 ]; then
   write_failure_state "compare_failed" "pass" "failed" "screening_only" "continue"
 fi
 
-if [ -n "$CANDIDATE_RUNNER" ]; then
+if [ "$compare_rc" -ne 0 ]; then
+  log "skipping paired A/B because candidate compare did not pass"
+elif [ -n "$CANDIDATE_RUNNER" ]; then
   if [ -x "$CANDIDATE_RUNNER" ]; then
     log "running interleaved paired A/B (control=$RUNNER, candidate=$CANDIDATE_RUNNER)"
     set_compare false
@@ -1236,6 +1351,14 @@ if [ -n "$CANDIDATE_RUNNER" ]; then
         log "WARN paired_candidate rc!=0 at pair_index=$pair_index"
       fi
     done
+    paired_error_count=$(count_runner_failure_markers "$RUN_DIR"/paired_ctrl_*.log "$RUN_DIR"/paired_cand_*.log)
+    if [ "$paired_error_count" -ne 0 ]; then
+      echo "paired_error_grep_count=$paired_error_count" | tee -a "$RUN_DIR/current_compare.txt"
+      log "ERROR paired A/B logs contain runner failure markers; refusing timing verdict"
+      write_failure_state "timing_failed" "pass" "pass" "failed"
+      sync_log_artifacts
+      exit 1
+    fi
   else
     log "WARN CANDIDATE_RUNNER set but not executable: $CANDIDATE_RUNNER; skipping paired A/B"
   fi
