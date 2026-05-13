@@ -97,6 +97,18 @@ def _parse_float(raw: str | None, default: float = 0.0) -> float:
         return default
 
 
+def _summary_float(summary: str | None, key: str, default: float = 0.0) -> float:
+    if not summary:
+        return default
+    prefix = f"{key}="
+    for part in str(summary).replace(",", ";").split(";"):
+        part = part.strip()
+        if not part.startswith(prefix):
+            continue
+        return _parse_float(part[len(prefix) :], default)
+    return default
+
+
 def _split_touched(raw: str | None) -> list[str]:
     if not raw:
         return []
@@ -283,12 +295,14 @@ def _combination_lane(
 
     eligible = []
     for row in neutral_rows:
-        target = (row.get("target") or "").strip()
+        target = (row.get("target") or row.get("candidate_id") or "").strip()
         if not target or _is_blocked(target, cooldown_rows):
             continue
         compat = (row.get("stack_compatibility") or "").strip().lower()
-        if compat in {"single"} and not row.get("touched_files"):
+        if compat in {"single"}:
             continue
+        row = dict(row)
+        row.setdefault("target", target)
         eligible.append(row)
 
     if len(eligible) < 2:
@@ -299,7 +313,12 @@ def _combination_lane(
     # compatible one, then remove the pair and repeat. Triples extend the pair
     # by trying one more compatible member.
     def gain(row: dict[str, str]) -> float:
-        return _parse_float(row.get("aggregate_gain_seconds")) or _parse_float(row.get("median_delta_ms")) / 1000.0
+        return (
+            _parse_float(row.get("aggregate_gain_seconds"))
+            or _parse_float(row.get("median_delta_ms")) / 1000.0
+            or _summary_float(row.get("timing_summary"), "median_delta_ms") / 1000.0
+            or _summary_float(row.get("timing_summary"), "delta_ms") / 1000.0
+        )
 
     eligible.sort(key=gain, reverse=True)
     used_ids: set[str] = set()

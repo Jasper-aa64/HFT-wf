@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -32,6 +33,13 @@ from psi_candidate_generator import (
 from psi_patch_queue import register_candidate
 
 
+PLACEHOLDER_MARKERS = (
+    "no patch body prepared yet",
+    "git diff snapshot unavailable",
+    "# empty worktree snapshot",
+)
+
+
 def _write_tsv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
@@ -39,6 +47,70 @@ def _write_tsv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) ->
         writer.writeheader()
         for row in rows:
             writer.writerow({field: row.get(field, "") for field in fieldnames})
+
+
+def _patch_has_real_diff(path: Path) -> bool:
+    if not path.exists() or not path.is_file():
+        return False
+    text = path.read_text(encoding="utf-8-sig", errors="replace")
+    if not text.strip():
+        return False
+    if any(marker in text for marker in PLACEHOLDER_MARKERS):
+        return False
+    return "diff --git " in text
+
+
+def _load_manifest_entries(run_dir: Path) -> dict[str, dict[str, Any]]:
+    manifest_path = run_dir / "patches" / "patch_manifest.json"
+    if not manifest_path.exists():
+        return {}
+    data = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    return {
+        str(entry.get("candidate_id", "")): entry
+        for entry in data.get("entries", [])
+        if entry.get("candidate_id")
+    }
+
+
+def _member_patch_path(run_dir: Path, member_id: str, neutral_rows: list[dict[str, str]], manifest: dict[str, dict[str, Any]]) -> Path | None:
+    for row in neutral_rows:
+        if (row.get("candidate_id") or "").strip() != member_id:
+            continue
+        patch_path = (row.get("patch_path") or "").strip()
+        if patch_path:
+            return run_dir / patch_path
+    entry = manifest.get(member_id)
+    if entry and entry.get("path"):
+        return run_dir / str(entry["path"])
+    return None
+
+
+def materialize_stack_patch(run_dir: Path, stack: Candidate) -> tuple[str, list[str]]:
+    """Return a concatenated git patch for a stack or missing member reasons.
+
+    Combination candidates are only executable when every neutral member has a
+    replayable git diff. Placeholder patches are intentionally rejected so the
+    long-run cannot claim to have tested a stack that never changed code.
+    """
+
+    run_dir = Path(run_dir)
+    neutral_rows = read_tsv(run_dir / "neutral_pool.tsv")
+    manifest = _load_manifest_entries(run_dir)
+    parts: list[str] = []
+    missing: list[str] = []
+    for member_id in stack.stack_members:
+        path = _member_patch_path(run_dir, member_id, neutral_rows, manifest)
+        if path is None:
+            missing.append(f"{member_id}: no patch path")
+            continue
+        if not _patch_has_real_diff(path):
+            missing.append(f"{member_id}: missing real git diff at {path}")
+            continue
+        text = path.read_text(encoding="utf-8-sig")
+        parts.append(f"# stack_member={member_id}\n{text.rstrip()}\n")
+    if missing:
+        return "", missing
+    return "\n".join(parts).rstrip() + "\n", []
 
 
 def build_next_stack(
@@ -71,6 +143,9 @@ def enqueue_stack(
     """Record the proposed stack in ``patch_queue.tsv`` and patch manifest."""
 
     run_dir = Path(run_dir)
+    patch_body, missing = materialize_stack_patch(run_dir, stack)
+    if missing:
+        raise ValueError("neutral stack requires replayable member patches: " + "; ".join(missing))
     manifest_entry = register_candidate(
         run_dir,
         candidate_id=stack.candidate_id,
@@ -82,6 +157,7 @@ def enqueue_stack(
         stack_members=stack.stack_members,
         base_commit=base_commit,
         revert_method="remote bash helper reverts patch files listed in touched_files",
+        patch_body=patch_body,
         status="pending",
     )
 

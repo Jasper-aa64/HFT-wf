@@ -8,8 +8,9 @@ things:
    so they can be replayed or audited after a run.
 2. Maintains ``<run_dir>/patches/patch_manifest.json`` with per-candidate
    metadata: ``candidate_id``, ``path``, ``base_commit``, ``applied_at``,
-   ``status`` (``pending|applied|reverted|failed``), ``touched_files``, and
-   ``revert_method`` text (how to undo if a remote job needs to).
+   ``status`` (``pending|applied|reverted|failed``), ``touched_files``,
+   materialization audit fields, and ``revert_method`` text (how to undo if a
+   remote job needs to).
 
 The helpers here do not apply patches on disk. Remote apply/revert is done by
 ``psi_headless_remote.sh``. The auto-loop uses this module to record intent and
@@ -18,6 +19,7 @@ status so the run root is the single machine-readable surface.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -92,6 +94,12 @@ def register_candidate(
     revert_method: str = "git -C <repo> checkout -- <touched_files>",
     patch_body: str | bytes | None = None,
     status: str = "pending",
+    candidate_workspace: str = "",
+    patch_command: str = "",
+    materialization_status: str = "",
+    materialization_reason: str = "",
+    patch_command_rc: int | None = None,
+    patch_source: str = "",
 ) -> dict[str, Any]:
     """Register a candidate patch. Writes the patch file and updates the manifest.
 
@@ -106,6 +114,7 @@ def register_candidate(
     patch_dir = patches_dir(run_dir)
     patch_path = patch_dir / f"{candidate_id}.patch"
 
+    patch_bytes: bytes
     if patch_body is None:
         patch_body_text = (
             f"# candidate_id={candidate_id}\n"
@@ -115,11 +124,14 @@ def register_candidate(
             f"# status={status}\n"
             "# no patch body prepared yet; replay requires a worktree diff snapshot\n"
         )
-        patch_path.write_text(patch_body_text, encoding="utf-8")
+        patch_bytes = patch_body_text.encode("utf-8")
+        patch_path.write_bytes(patch_bytes)
     elif isinstance(patch_body, bytes):
-        patch_path.write_bytes(patch_body)
+        patch_bytes = patch_body
+        patch_path.write_bytes(patch_bytes)
     else:
-        patch_path.write_text(patch_body, encoding="utf-8")
+        patch_bytes = patch_body.encode("utf-8")
+        patch_path.write_bytes(patch_bytes)
 
     manifest = load_manifest(run_dir)
     entry = _find_entry(manifest, candidate_id)
@@ -137,6 +149,14 @@ def register_candidate(
         "status": status,
         "applied_at": "" if status != "applied" else utc_now(),
         "revert_method": revert_method,
+        "candidate_workspace": candidate_workspace,
+        "patch_command": patch_command,
+        "patch_command_rc": patch_command_rc,
+        "patch_source": patch_source,
+        "materialization_status": materialization_status,
+        "materialization_reason": materialization_reason,
+        "patch_sha256": hashlib.sha256(patch_bytes).hexdigest(),
+        "patch_bytes": len(patch_bytes),
         "recorded_at": utc_now(),
         "updated_at": utc_now(),
     }
