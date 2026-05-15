@@ -102,6 +102,16 @@ ms_to_seconds() {
   awk -v ms="$1" 'BEGIN { printf "%.3f", ms / 1000 }'
 }
 
+prepare_runtime_log_dir() {
+  local today runner_log_dir
+  today="$(date +%Y%m%d)"
+  runner_log_dir="$ROOT/PsiTraderRunner/log/$today"
+  if ! mkdir -p "$runner_log_dir"; then
+    log "ERROR failed to prepare runtime log dir: $runner_log_dir"
+    return 1
+  fi
+}
+
 run_runner() {
   local label="$1"
   local log_file="$2"
@@ -1241,6 +1251,11 @@ fi
 stage_runtime_config
 set_compare false
 grep "isCompareFile" "$CONFIG" | tee -a "$RUN_DIR/summary.txt"
+if ! prepare_runtime_log_dir; then
+  write_failure_state "runtime_log_dir_failed" "not_run" "not_run" "not_run"
+  sync_log_artifacts
+  exit 1
+fi
 
 log "building"
 if [ ! -f "$BUILD_DIR/CMakeCache.txt" ]; then

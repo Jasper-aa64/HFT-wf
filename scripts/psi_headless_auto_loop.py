@@ -87,6 +87,58 @@ FORBIDDEN_PATCH_PATH_PARTS = {
     "datasets",
     "output_schema",
 }
+
+PAIRED_NUMERIC_FIELDS = (
+    "paired_sample_count",
+    "median_delta_ms",
+    "bootstrap_ci_low_ms",
+    "bootstrap_ci_high_ms",
+    "permutation_p_value",
+    "paired_stdev_ms",
+    "paired_range_ms",
+    "paired_mean_ms",
+)
+
+
+def _coerce_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _merge_comparison_summary(batch_state: dict[str, Any], summary: dict[str, Any]) -> None:
+    """Carry the remote comparison decision into the local candidate verdict surface."""
+
+    for field in (
+        "compare_result",
+        "decision",
+        "accepted",
+        "paired_evidence_status",
+        "paired_evidence_reason",
+        "timing_verdict",
+        "timing_verdict_reason",
+        "timing_verdict_method",
+    ):
+        if field in summary:
+            batch_state[field] = summary[field]
+    if summary.get("compare_result") and not batch_state.get("compare_status"):
+        batch_state["compare_status"] = summary["compare_result"]
+    paired = summary.get("paired") if isinstance(summary.get("paired"), dict) else {}
+    for field in PAIRED_NUMERIC_FIELDS:
+        value = paired.get(field, summary.get(field))
+        if value is None:
+            continue
+        batch_state[field] = value
+    if paired.get("noise_flag"):
+        batch_state["noise_flag"] = paired["noise_flag"]
+    if paired.get("paired_deltas_ms"):
+        batch_state["paired_deltas_ms"] = paired["paired_deltas_ms"]
+    if summary.get("control") and isinstance(summary["control"], dict):
+        control = summary["control"]
+        median = _coerce_float(control.get("median_ms"))
+        if median is not None:
+            batch_state["control_median_ms"] = median
 FORBIDDEN_PATCH_FILENAMES = {
     "config.yaml",
     "config.yml",
@@ -846,6 +898,17 @@ def call_ssh_remote_batch(
             write_json(iteration_dir / "remote_run_state.json", batch_state)
         except json.JSONDecodeError:
             batch_state = {}
+    summary_result = _ssh(
+        args.remote_host,
+        f"cat {_remote_quote(_remote_join(remote_iter_dir, 'comparison_summary.json'))} 2>/dev/null || true",
+    )
+    if summary_result.stdout.strip():
+        try:
+            comparison_summary = json.loads(summary_result.stdout)
+            write_json(iteration_dir / "remote_comparison_summary.json", comparison_summary)
+            _merge_comparison_summary(batch_state, comparison_summary)
+        except json.JSONDecodeError:
+            pass
     batch_state.setdefault("remote_host", args.remote_host)
     batch_state.setdefault("remote_run_dir", remote_iter_dir)
     if remote_ws:
@@ -959,7 +1022,7 @@ def record_attempt(
         "semantic_risk": candidate.get("semantic_risk", ""),
         "build_status": batch_state.get("build_status", ""),
         "compare_status": batch_state.get("compare_status", ""),
-        "paired_sample_count": batch_state.get("paired_sample_count", ""),
+        "paired_sample_count": str(batch_state.get("paired_sample_count", "")),
         "timing_verdict": batch_state.get("timing_verdict", batch_state.get("timing_status", "")),
         "sample_count": len(batch_state.get("candidate_samples_ms") or []),
         "samples_ms": ",".join(
@@ -1151,14 +1214,14 @@ def judge_verdict(batch_state: dict[str, Any]) -> tuple[str, str]:
         return "rejected", "compare gate failed; fix patch before retry"
 
     noise_flag = (batch_state.get("noise_flag") or "").upper()
-    if noise_flag == "NOISY":
+    timing = (batch_state.get("timing_verdict") or batch_state.get("timing_status") or "").upper()
+    if noise_flag == "NOISY" or timing == "NOISY_PENDING":
         return (
             "NOISY_PENDING",
             "retry when same-host control stdev_ms < 1500 or paired range_ms < 1500",
         )
 
-    timing = (batch_state.get("timing_verdict") or batch_state.get("timing_status") or "").lower()
-    if timing == "accepted":
+    if timing.lower() == "accepted":
         return "accepted", ""
     delta = batch_state.get("delta_ms") or 0.0
     if delta <= -100.0:
