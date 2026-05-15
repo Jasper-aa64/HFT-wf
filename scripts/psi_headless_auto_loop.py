@@ -421,14 +421,23 @@ def _remote_candidate_workspace(args: argparse.Namespace, run_dir: Path, candida
     )
 
 
+def _remote_default_build_dir(root: str) -> str:
+    return _remote_join(root, "build/linux-relwithdebinfo-boost182")
+
+
+def _remote_default_runner(build_dir: str) -> str:
+    return _remote_join(build_dir, "build_x64/RelWithDebInfo/bin/PsiTraderRunner/PsiTraderRunner")
+
+
 def _ssh(remote_host: str, command: str, *, text: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["ssh", remote_host, command],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=text,
-    )
+    kwargs: dict[str, Any] = {
+        "check": False,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+    }
+    if text:
+        kwargs.update({"text": True, "encoding": "utf-8", "errors": "replace"})
+    return subprocess.run(["ssh", remote_host, command], **kwargs)
 
 
 def _sync_candidate_workspace_to_remote(
@@ -792,9 +801,15 @@ def call_ssh_remote_batch(
             remote_env[name] = str(value)
     if remote_ws:
         remote_env["ROOT"] = remote_ws
+        candidate_build_dir = _remote_default_build_dir(remote_ws)
+        remote_env["BUILD_DIR"] = candidate_build_dir
+        remote_env["CANDIDATE_RUNNER"] = _remote_default_runner(candidate_build_dir)
+        if not args.runner:
+            control_root = str(args.root or "/root/work/Code1/psi-trader-liangjunming")
+            remote_env["RUNNER"] = _remote_default_runner(_remote_default_build_dir(control_root))
     elif args.root:
         remote_env["ROOT"] = str(args.root)
-    if args.candidate_runner:
+    if args.candidate_runner and not remote_ws:
         remote_env["CANDIDATE_RUNNER"] = str(args.candidate_runner)
     if args.build_dir and not remote_ws:
         remote_env["BUILD_DIR"] = str(args.build_dir)
