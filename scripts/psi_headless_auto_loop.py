@@ -333,14 +333,15 @@ def _candidate_workspace(args: argparse.Namespace, run_dir: Path, candidate: dic
 
 
 def _git(workspace: Path, args: list[str], *, text: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", *args],
-        cwd=str(workspace),
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=text,
-    )
+    kwargs: dict[str, Any] = {
+        "cwd": str(workspace),
+        "check": False,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+    }
+    if text:
+        kwargs.update({"text": True, "encoding": "utf-8", "errors": "replace"})
+    return subprocess.run(["git", *args], **kwargs)
 
 
 def _git_head(root: Path) -> str:
@@ -463,6 +464,8 @@ def _sync_candidate_workspace_to_remote(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         if scp.returncode != 0:
             return "", f"scp candidate workspace failed: {scp.stderr.strip()}"
@@ -562,6 +565,8 @@ def _run_external_patch_command(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     return completed.returncode, completed.stdout
 

@@ -1246,13 +1246,16 @@ log "building"
 if [ ! -f "$BUILD_DIR/CMakeCache.txt" ]; then
   log "configuring build dir: $BUILD_DIR"
   mkdir -p "$BUILD_DIR"
-  configure_flags=()
+  configure_status=0
   if [ -n "${CMAKE_CONFIGURE_FLAGS:-}" ]; then
     # Intentionally split extra CMake flags on shell words; callers must avoid
     # spaces inside individual -D values.
-    read -r -a configure_flags <<< "$CMAKE_CONFIGURE_FLAGS"
+    # shellcheck disable=SC2086
+    (cd "$ROOT" && cmake -S "$ROOT" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-RelWithDebInfo}" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON $CMAKE_CONFIGURE_FLAGS > "$RUN_DIR/configure.log" 2>&1) || configure_status=$?
+  else
+    (cd "$ROOT" && cmake -S "$ROOT" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-RelWithDebInfo}" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON > "$RUN_DIR/configure.log" 2>&1) || configure_status=$?
   fi
-  if ! (cd "$ROOT" && cmake -S "$ROOT" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-RelWithDebInfo}" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON "${configure_flags[@]}" > "$RUN_DIR/configure.log" 2>&1); then
+  if [ "$configure_status" -ne 0 ]; then
     log "ERROR configure failed"
     tail -80 "$RUN_DIR/configure.log" > "$RUN_DIR/configure_tail.txt"
     write_failure_state "configure_failed" "failed" "not_run" "not_run"
