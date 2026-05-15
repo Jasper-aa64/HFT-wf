@@ -45,6 +45,7 @@ import shutil
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -388,6 +389,88 @@ def _validate_patch_boundaries(changed_files: list[str]) -> list[str]:
     return violations
 
 
+def _remote_quote(value: str | Path) -> str:
+    return shlex.quote(str(value))
+
+
+def _remote_join(root: str, *parts: str) -> str:
+    out = root.rstrip("/")
+    for part in parts:
+        clean = str(part).strip("/")
+        if clean:
+            out += "/" + clean
+    return out
+
+
+def _remote_run_root(args: argparse.Namespace, run_dir: Path) -> str:
+    return args.remote_run_dir or _remote_join(args.remote_run_root, run_dir.name)
+
+
+def _remote_iteration_dir(args: argparse.Namespace, run_dir: Path, candidate: dict[str, Any], iteration: int) -> str:
+    return _remote_join(
+        _remote_run_root(args, run_dir),
+        "iterations",
+        f"iter_{iteration:03d}_{candidate['candidate_id']}",
+    )
+
+
+def _remote_candidate_workspace(args: argparse.Namespace, run_dir: Path, candidate: dict[str, Any]) -> str:
+    return _remote_join(
+        args.remote_candidate_workspace_root or _remote_join(_remote_run_root(args, run_dir), "candidate_workspaces"),
+        candidate["candidate_id"],
+    )
+
+
+def _ssh(remote_host: str, command: str, *, text: bool = True) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["ssh", remote_host, command],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=text,
+    )
+
+
+def _sync_candidate_workspace_to_remote(
+    args: argparse.Namespace,
+    run_dir: Path,
+    candidate: dict[str, Any],
+) -> tuple[str, str]:
+    workspace_raw = candidate.get("candidate_workspace") or ""
+    if not workspace_raw:
+        return "", "candidate workspace is missing"
+    workspace = Path(workspace_raw)
+    if not workspace.exists():
+        return "", f"candidate workspace does not exist: {workspace}"
+
+    remote_ws = _remote_candidate_workspace(args, run_dir, candidate)
+    with tempfile.TemporaryDirectory(prefix="psi_candidate_sync_") as tmp:
+        archive_base = Path(tmp) / candidate["candidate_id"]
+        archive_path = Path(shutil.make_archive(str(archive_base), "gztar", root_dir=workspace))
+        remote_archive = f"/tmp/{archive_path.name}"
+        scp = subprocess.run(
+            ["scp", str(archive_path), f"{args.remote_host}:{remote_archive}"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if scp.returncode != 0:
+            return "", f"scp candidate workspace failed: {scp.stderr.strip()}"
+
+    parent = str(Path(remote_ws).parent).replace("\\", "/")
+    unpack = (
+        f"rm -rf {_remote_quote(remote_ws)} && "
+        f"mkdir -p {_remote_quote(parent)} {_remote_quote(remote_ws)} && "
+        f"tar -xzf {_remote_quote(remote_archive)} -C {_remote_quote(remote_ws)} && "
+        f"rm -f {_remote_quote(remote_archive)}"
+    )
+    result = _ssh(args.remote_host, unpack)
+    if result.returncode != 0:
+        return "", f"remote candidate workspace unpack failed: {result.stderr.strip() or result.stdout.strip()}"
+    return remote_ws, ""
+
+
 def _prepare_workspace(source_root: Path, workspace: Path, *, refresh: bool) -> tuple[bool, str]:
     if workspace.exists():
         if not refresh:
@@ -605,6 +688,9 @@ def call_remote_batch(
     if args.dry_run:
         return _dry_run_remote_batch(run_dir, iteration_dir, candidate, iteration)
 
+    if args.remote_host:
+        return call_ssh_remote_batch(args, run_dir, iteration_dir, candidate, iteration)
+
     env = os.environ.copy()
     env.update(
         {
@@ -649,6 +735,101 @@ def call_remote_batch(
             stderr=subprocess.STDOUT,
         )
     batch_state = read_json(iteration_dir / "run_state.json")
+    return result.returncode, iteration_dir, batch_state
+
+
+def call_ssh_remote_batch(
+    args: argparse.Namespace,
+    run_dir: Path,
+    iteration_dir: Path,
+    candidate: dict[str, Any],
+    iteration: int,
+) -> tuple[int, Path, dict[str, Any]]:
+    """Run the batch on a remote host after syncing the local candidate workspace."""
+
+    log_path = run_dir / "logs" / f"iter_{iteration:03d}.log"
+    remote_iter_dir = _remote_iteration_dir(args, run_dir, candidate, iteration)
+    remote_ws = ""
+    sync_reason = ""
+    candidate_ws = candidate.get("candidate_workspace")
+    if candidate_ws:
+        remote_ws, sync_reason = _sync_candidate_workspace_to_remote(args, run_dir, candidate)
+        if sync_reason:
+            log_path.write_text(sync_reason + "\n", encoding="utf-8")
+            return 1, iteration_dir, {
+                "status": "stopped",
+                "batch_status": "failed",
+                "iteration": iteration,
+                "candidate_id": candidate["candidate_id"],
+                "lane": candidate["lane"],
+                "target": candidate["target"],
+                "build_status": "not_run",
+                "compare_status": "not_run",
+                "timing_status": "remote_sync_failed",
+                "timing_verdict": "remote_sync_failed",
+                "comparison_accepted": False,
+                "paired_sample_count": 0,
+                "patch_materialization_status": "materialized",
+                "remote_sync_status": "failed",
+                "remote_sync_reason": sync_reason,
+            }
+        candidate["remote_candidate_workspace"] = remote_ws
+
+    remote_env = {
+        "RUN_ID": f"{run_dir.name}_iter_{iteration:03d}",
+        "RUN_DIR": remote_iter_dir,
+        "HEADLESS_CONTROL_DIR": remote_iter_dir,
+        "GENERATE_REPORT": "0",
+        "MEASURE_RUNS": str(args.measure_runs),
+        "CANDIDATE_ID": candidate["candidate_id"],
+        "CANDIDATE_LANE": candidate["lane"],
+        "CANDIDATE_TARGET": candidate["target"],
+        "CANDIDATE_TOUCHED_FILES": "|".join(candidate.get("touched_files", [])),
+    }
+    for name in ("ENV_FILE", "RUNNER", "CONFIG", "OUTPUT_DIR"):
+        value = getattr(args, name.lower(), None)
+        if value:
+            remote_env[name] = str(value)
+    if remote_ws:
+        remote_env["ROOT"] = remote_ws
+    elif args.root:
+        remote_env["ROOT"] = str(args.root)
+    if args.candidate_runner:
+        remote_env["CANDIDATE_RUNNER"] = str(args.candidate_runner)
+    if args.build_dir and not remote_ws:
+        remote_env["BUILD_DIR"] = str(args.build_dir)
+
+    env_prefix = " ".join(f"{key}={_remote_quote(value)}" for key, value in remote_env.items())
+    remote_batch_script = args.remote_batch_script or str(args.batch_script)
+    command = (
+        f"cd {_remote_quote(args.remote_hft_root)} && "
+        f"{env_prefix} {_remote_quote(args.bash)} {_remote_quote(remote_batch_script)}"
+    )
+    with log_path.open("w", encoding="utf-8") as handle:
+        handle.write(f"iteration={iteration}\n")
+        handle.write(f"candidate_id={candidate['candidate_id']}\n")
+        handle.write(f"lane={candidate['lane']}\n")
+        handle.write(f"remote_host={args.remote_host}\n")
+        handle.write(f"remote_run_dir={remote_iter_dir}\n")
+        if remote_ws:
+            handle.write(f"remote_candidate_workspace={remote_ws}\n")
+        handle.flush()
+        result = _ssh(args.remote_host, command)
+        handle.write(result.stdout or "")
+        handle.write(result.stderr or "")
+
+    state_result = _ssh(args.remote_host, f"cat {_remote_quote(_remote_join(remote_iter_dir, 'run_state.json'))} 2>/dev/null || true")
+    batch_state: dict[str, Any] = {}
+    if state_result.stdout.strip():
+        try:
+            batch_state = json.loads(state_result.stdout)
+            write_json(iteration_dir / "remote_run_state.json", batch_state)
+        except json.JSONDecodeError:
+            batch_state = {}
+    batch_state.setdefault("remote_host", args.remote_host)
+    batch_state.setdefault("remote_run_dir", remote_iter_dir)
+    if remote_ws:
+        batch_state.setdefault("remote_candidate_workspace", remote_ws)
     return result.returncode, iteration_dir, batch_state
 
 
@@ -1175,6 +1356,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--batch-script", type=Path, default=repo_root() / "scripts" / "psi_headless_remote.sh")
     parser.add_argument("--bash", default="bash")
+    parser.add_argument("--remote-host", default="", help="SSH host for remote build/compare/timing. Patch generation still runs locally.")
+    parser.add_argument("--remote-hft-root", default="/root/work/HFT-wf", help="Remote HFT-wf root containing the batch script.")
+    parser.add_argument("--remote-batch-script", default="scripts/psi_headless_remote.sh", help="Batch script path on the remote host, relative to --remote-hft-root unless absolute.")
+    parser.add_argument("--remote-run-root", default="/root/work/psi_experiments/runs", help="Remote parent directory for per-run artifacts.")
+    parser.add_argument("--remote-run-dir", default="", help="Exact remote run root override. Defaults to <remote-run-root>/<local-run-dir-name>.")
+    parser.add_argument("--remote-candidate-workspace-root", default="", help="Remote parent directory for synced local candidate workspaces.")
     parser.add_argument("--max-iterations", type=int, default=6)
     parser.add_argument("--max-hours", type=float, default=8.0)
     parser.add_argument("--max-candidates", type=int, default=12)
