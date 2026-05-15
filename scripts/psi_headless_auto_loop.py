@@ -346,6 +346,84 @@ def refresh_control_distribution(run_dir: Path, host_key: str, window: int = 20)
     return distribution
 
 
+# ------------------------------- quiet retry gate -------------------------------
+
+
+def _remote_runner_idle(args: argparse.Namespace) -> tuple[bool, str]:
+    if not args.remote_host:
+        return True, "local/no-remote-host"
+    result = _ssh(args.remote_host, "pgrep -a -x PsiTraderRunner || true")
+    active = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+    if active:
+        return False, "; ".join(active[:3])
+    return True, "no PsiTraderRunner process"
+
+
+def quiet_retry_ready_targets(
+    args: argparse.Namespace,
+    run_dir: Path,
+    control_distribution: dict[str, Any],
+) -> set[str]:
+    retry_rows = [
+        row
+        for row in read_tsv(run_dir / "retry_conditions.tsv")
+        if (row.get("status") or "").strip() == "NOISY_PENDING"
+    ]
+    gate: dict[str, Any] = {
+        "updated_at": utc_now(),
+        "remote_host": args.remote_host or "",
+        "enabled": bool(retry_rows),
+        "control_distribution": control_distribution,
+        "thresholds": {
+            "min_control_samples": args.quiet_retry_min_control_samples,
+            "control_stdev_ms": args.quiet_retry_control_stdev_ms,
+            "control_range_ms": args.quiet_retry_control_range_ms,
+        },
+        "remote_idle": False,
+        "remote_idle_reason": "",
+        "ready_targets": [],
+        "blocked": [],
+    }
+    if not retry_rows:
+        write_json(run_dir / "quiet_retry_gate.json", gate)
+        return set()
+
+    idle, idle_reason = _remote_runner_idle(args)
+    gate["remote_idle"] = idle
+    gate["remote_idle_reason"] = idle_reason
+
+    sample_count = int(control_distribution.get("sample_count") or 0)
+    stdev_ms = float(control_distribution.get("stdev_of_medians_ms") or 0.0)
+    range_ms = float(control_distribution.get("range_ms") or 0.0)
+    control_ok = (
+        sample_count >= args.quiet_retry_min_control_samples
+        and stdev_ms <= args.quiet_retry_control_stdev_ms
+        and range_ms <= args.quiet_retry_control_range_ms
+    )
+
+    ready: set[str] = set()
+    for row in retry_rows:
+        target = (row.get("target") or "").strip()
+        if not target:
+            continue
+        if idle and control_ok:
+            ready.add(target)
+            gate["ready_targets"].append(target)
+        else:
+            reasons = []
+            if not idle:
+                reasons.append(f"remote_busy={idle_reason}")
+            if sample_count < args.quiet_retry_min_control_samples:
+                reasons.append(f"control_samples={sample_count}<{args.quiet_retry_min_control_samples}")
+            if stdev_ms > args.quiet_retry_control_stdev_ms:
+                reasons.append(f"control_stdev_ms={stdev_ms:.3f}>{args.quiet_retry_control_stdev_ms:.3f}")
+            if range_ms > args.quiet_retry_control_range_ms:
+                reasons.append(f"control_range_ms={range_ms:.3f}>{args.quiet_retry_control_range_ms:.3f}")
+            gate["blocked"].append({"target": target, "reasons": reasons})
+    write_json(run_dir / "quiet_retry_gate.json", gate)
+    return ready
+
+
 # ------------------------------- candidate selection -------------------------------
 
 
@@ -1329,8 +1407,9 @@ def iteration_step(
 
     seed_profile_if_missing(run_dir)
     control_distribution = refresh_control_distribution(run_dir, host_key)
+    retry_ready_targets = quiet_retry_ready_targets(args, run_dir, control_distribution)
     update_heartbeat(run_dir, "generate", "building three-lane candidate queue")
-    lanes = generate_candidates(run_dir)
+    lanes = generate_candidates(run_dir, retry_ready_targets=retry_ready_targets)
     # Persist a snapshot of the lane queue for this iteration.
     iteration_dir = run_dir / "iterations" / f"iter_{iteration:03d}_plan"
     iteration_dir.mkdir(parents=True, exist_ok=True)
@@ -1403,6 +1482,14 @@ def iteration_step(
         else:
             set_patch_status(run_dir, candidate["candidate_id"], "applied", note="accepted as new baseline")
     elif verdict == "NOISY_PENDING":
+        noisy_notes = (
+            f"candidate_id={candidate['candidate_id']};"
+            f" paired_sample_count={batch_state.get('paired_sample_count', '')};"
+            f" median_delta_ms={batch_state.get('median_delta_ms', '')};"
+            f" paired_range_ms={batch_state.get('paired_range_ms', '')};"
+            f" paired_stdev_ms={batch_state.get('paired_stdev_ms', '')};"
+            " candidate-level pause; loop continues"
+        )
         record_retry_condition(
             run_dir,
             candidate,
@@ -1410,7 +1497,7 @@ def iteration_step(
             noise_flag="NOISY",
             required_condition=retry_condition,
             last_exit_reason="",
-            notes="candidate-level pause; loop continues",
+            notes=noisy_notes,
         )
         set_patch_status(run_dir, candidate["candidate_id"], "reverted", note="noisy; reverted pending rerun")
     elif verdict == "rejected":
@@ -1452,6 +1539,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--first-accepted-stop", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--repeated-infra-failures", type=int, default=2)
     parser.add_argument("--stack-throttle", type=int, default=3, help="Try a neutral stack at most every N iterations")
+    parser.add_argument("--quiet-retry-min-control-samples", type=int, default=20, help="Minimum same-host control samples required before retrying a NOISY_PENDING candidate.")
+    parser.add_argument("--quiet-retry-control-stdev-ms", type=float, default=800.0, help="Maximum same-host control median stdev before retrying a NOISY_PENDING candidate.")
+    parser.add_argument("--quiet-retry-control-range-ms", type=float, default=2000.0, help="Maximum same-host control sample range before retrying a NOISY_PENDING candidate.")
     parser.add_argument("--host-key", default="")
     parser.add_argument("--root")
     parser.add_argument("--env-file")

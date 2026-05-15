@@ -209,6 +209,63 @@ def _evidence_lane(
     return candidates
 
 
+def _latest_attempt_by_target(attempts_rows: list[dict[str, str]]) -> dict[str, dict[str, str]]:
+    latest: dict[str, dict[str, str]] = {}
+    for row in attempts_rows:
+        target = (row.get("target") or "").strip()
+        if target:
+            latest[target] = row
+    return latest
+
+
+def _retry_lane(
+    retry_rows: list[dict[str, str]],
+    attempts_rows: list[dict[str, str]],
+    cooldown_rows: list[dict[str, str]],
+    *,
+    retry_ready_targets: set[str],
+    top_k: int,
+) -> list[Candidate]:
+    """Emit noisy candidates only after the controller's quiet-window gate passes."""
+
+    if not retry_ready_targets:
+        return []
+    latest_attempts = _latest_attempt_by_target(attempts_rows)
+    candidates: list[Candidate] = []
+    for row in retry_rows:
+        target = (row.get("target") or "").strip()
+        if not target or target not in retry_ready_targets:
+            continue
+        if _is_blocked(target, cooldown_rows):
+            continue
+        if (row.get("status") or "").strip() != "NOISY_PENDING":
+            continue
+        attempt = latest_attempts.get(target, {})
+        touched = _split_touched(attempt.get("touched_files") or target)
+        candidate = Candidate(
+            candidate_id=f"retry_{_safe_token(target)}",
+            lane="evidence",
+            hypothesis=(
+                f"quiet-window retry for prior NOISY_PENDING target {target}; "
+                "rerun the same real patch only when host noise gates pass."
+            ),
+            target=target,
+            expected_effect=attempt.get("notes") or "m24 repeat under quiet-host gate",
+            semantic_risk=attempt.get("semantic_risk") or "low",
+            touched_files=touched or [target],
+            source_evidence={
+                "kind": "quiet_retry",
+                "retry_condition": row,
+                "latest_attempt": attempt,
+            },
+            rank_score=10_000.0 + len(candidates),
+        )
+        candidates.append(candidate)
+        if len(candidates) >= top_k:
+            break
+    return candidates
+
+
 def _insight_lane(
     profile_rows: list[dict[str, str]],
     cooldown_rows: list[dict[str, str]],
@@ -392,6 +449,8 @@ def generate_candidates(
     insight_top_k: int = 2,
     combination_top_k: int = 2,
     combination_max_members: int = 3,
+    retry_ready_targets: set[str] | None = None,
+    retry_top_k: int = 1,
 ) -> dict[str, list[dict[str, Any]]]:
     """Produce the lane-split candidate queue for this run.
 
@@ -406,15 +465,25 @@ def generate_candidates(
     attempts_rows = read_tsv(run_dir / "attempts.tsv")
     cooldown_rows = read_tsv(run_dir / "cooldown.tsv")
     neutral_rows = read_tsv(run_dir / "neutral_pool.tsv")
+    retry_rows = read_tsv(run_dir / "retry_conditions.tsv")
     recent_counts = _recent_attempt_counts(attempts_rows)
 
-    evidence = _evidence_lane(
+    retry = _retry_lane(
+        retry_rows,
+        attempts_rows,
+        cooldown_rows,
+        retry_ready_targets=retry_ready_targets or set(),
+        top_k=retry_top_k,
+    )
+    retry_targets = {candidate.target for candidate in retry}
+    evidence_regular = _evidence_lane(
         hotspot_rows,
         profile_rows,
         cooldown_rows,
         recent_counts,
         top_k=evidence_top_k,
     )
+    evidence = retry + [candidate for candidate in evidence_regular if candidate.target not in retry_targets]
     exclude_targets = {c.target for c in evidence}
     insight = _insight_lane(
         profile_rows,
