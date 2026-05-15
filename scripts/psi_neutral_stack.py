@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Neutral stack builder for the Psi headless auto-loop.
 
-Reads ``neutral_pool.tsv`` in a run root, selects compatible subsets (touched
-files do not overlap, combined semantic risk stays below ``high``), and writes
-a combined candidate row into ``patch_queue.tsv`` with a placeholder stack
-patch under ``patches/``. The remote ``psi_headless_remote.sh`` is the one that
-actually applies, builds, compares and times. This module only produces the
-queue entry and metadata so the auto-loop can drive that pipeline end-to-end.
+Reads ``neutral_pool.tsv`` in a run root, selects compatible subsets (combined
+semantic risk stays below ``high``), and writes a combined candidate row into
+``patch_queue.tsv``. Overlapping files are not rejected here; the active
+auto-loop asks the patch agent for one final composite workspace diff and lets
+the harness validate that diff before build/compare/timing.
 
 Design notes:
 
@@ -15,6 +14,8 @@ Design notes:
   stack, not the individual members.
 - Throttling is the auto-loop's job. This module just proposes the next
   stack; the caller decides whether to enqueue it.
+- ``materialize_stack_patch`` is a legacy replay helper for stored member
+  patches. It is not the strategy engine for resolving overlapping edits.
 """
 
 from __future__ import annotations

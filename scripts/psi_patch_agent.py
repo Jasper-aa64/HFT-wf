@@ -61,6 +61,7 @@ def load_candidate_context() -> dict[str, Any]:
         "hypothesis": metadata.get("hypothesis", ""),
         "expected_effect": metadata.get("expected_effect", ""),
         "semantic_risk": metadata.get("semantic_risk", ""),
+        "stack_members": metadata.get("stack_members", []),
         "source_evidence": metadata.get("source_evidence", {}),
     }
 
@@ -115,6 +116,16 @@ def build_optimization_prompt(ctx: dict[str, Any], sources: dict[str, str]) -> s
         source_blocks.append(f"### {path}\n```cpp\n{content}\n```")
 
     sources_text = "\n\n".join(source_blocks)
+    stack_members = ctx.get("stack_members") or []
+    stack_context = ""
+    if ctx.get("lane") == "combination" or stack_members:
+        stack_context = f"""
+## Combination Candidate
+- Stack members: {"|".join(str(member) for member in stack_members) or "(metadata omitted)"}
+- Treat the stack as one optimization, not as separate patches.
+- If member ideas overlap in the same file or line range, resolve the overlap in the workspace and output the final unified file contents.
+- The harness will validate only the final workspace diff, then build, compare, and time it.
+"""
 
     return f"""You are a C++ performance optimization expert working on a high-frequency trading system called Psi.
 
@@ -130,6 +141,7 @@ Generate an optimized version of the target code. The optimization must be:
 - Expected effect: {ctx['expected_effect']}
 - Semantic risk: {ctx['semantic_risk']}
 - Lane: {ctx['lane']}
+{stack_context}
 
 ## Source Evidence
 {json.dumps(ctx.get('source_evidence', {}), indent=2)}

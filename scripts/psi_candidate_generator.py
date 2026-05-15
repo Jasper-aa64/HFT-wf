@@ -9,9 +9,10 @@ candidates split into three lanes:
 - ``evidence``   - top-K profile-driven hotspots that already have evidence.
 - ``insight``    - small, narrow Class A / cache-locality candidates that are
                    not necessarily the top hotspot.
-- ``combination`` - compatible ``neutral_pool`` stacks whose touched files do
-                   not conflict and whose combined semantic risk stays below
-                   ``high``.
+- ``combination`` - compatible ``neutral_pool`` stacks whose combined
+                   semantic risk stays below ``high``. Overlap is not
+                   hard-rejected here; the agent may resolve it in the final
+                   composite patch.
 
 Each candidate dict carries the contract the task spec demands:
 ``candidate_id``, ``lane``, ``hypothesis``, ``target``, ``expected_effect``,
@@ -285,7 +286,6 @@ def _combination_lane(
     """Build compatible neutral-pool stacks.
 
     A pair/triple is compatible only if:
-    - no two members share any entry in ``touched_files`` (file-level conflict);
     - none of the members are blocked in cooldown;
     - combined semantic risk stays strictly below ``high``.
     """
@@ -336,14 +336,11 @@ def _combination_lane(
             peer = eligible[j]
             if row_id(peer) in used_ids:
                 continue
-            peer_touched = set(_split_touched(peer.get("touched_files") or peer.get("target")))
-            if peer_touched & touched:
-                continue
             candidate_risks = member_risks + [(peer.get("semantic_risk") or "low").lower()]
             if _rank_risk(_stack_risk(candidate_risks)) >= SEMANTIC_RISK_ORDER["high"]:
                 continue
             members.append(peer)
-            touched.update(peer_touched)
+            touched.update(_split_touched(peer.get("touched_files") or peer.get("target")))
             member_risks = candidate_risks
             if len(members) >= max_members:
                 break

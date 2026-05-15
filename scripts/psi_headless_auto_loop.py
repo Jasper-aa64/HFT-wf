@@ -56,9 +56,7 @@ from psi_patch_queue import (
     register_candidate as register_patch,
     set_status as set_patch_status,
     snapshot_worktree,
-    load_manifest as load_patch_manifest,
 )
-from psi_neutral_stack import materialize_stack_patch
 from psi_timing_history import (
     HISTORY_FIELDNAMES,
     default_host_key,
@@ -78,6 +76,32 @@ STOP_REASONS_GLOBAL = {
 
 LANE_PRIORITY = ("evidence", "insight", "combination")
 INFRA_FAILURES = {"missing_env_file", "runner_busy", "build_failed"}
+FORBIDDEN_PATCH_PATH_PARTS = {
+    "baseline",
+    "benchmark",
+    "benchmarks",
+    "compare",
+    "compare_gate",
+    "dataset",
+    "datasets",
+    "output_schema",
+}
+FORBIDDEN_PATCH_FILENAMES = {
+    "config.yaml",
+    "config.yml",
+    "factor_set.json",
+    "factor_set.yaml",
+    "factor_set.yml",
+    "factor_list.json",
+    "factor_list.yaml",
+    "factor_list.yml",
+}
+FORBIDDEN_PATCH_SUFFIXES = {
+    ".arrow",
+    ".csv",
+    ".feather",
+    ".parquet",
+}
 
 
 # ------------------------------- I/O helpers -------------------------------
@@ -307,15 +331,61 @@ def _candidate_workspace(args: argparse.Namespace, run_dir: Path, candidate: dic
     return (run_dir / "candidate_workspaces" / candidate["candidate_id"]).resolve()
 
 
-def _git_head(root: Path) -> str:
-    result = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+def _git(workspace: Path, args: list[str], *, text: bool = True) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", *args],
+        cwd=str(workspace),
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        text=text,
     )
+
+
+def _git_head(root: Path) -> str:
+    result = _git(root, ["rev-parse", "--short", "HEAD"])
     return result.stdout.strip() if result.returncode == 0 else "unknown"
+
+
+def _normalize_patch_path(path: str) -> str:
+    return path.replace("\\", "/").strip("/")
+
+
+def _boundary_violation(path: str) -> str:
+    clean = _normalize_patch_path(path)
+    if not clean:
+        return "empty patch path"
+    candidate_path = Path(clean)
+    if candidate_path.is_absolute() or ".." in candidate_path.parts or ".git" in candidate_path.parts:
+        return "patch path escapes the candidate workspace"
+    lowered_parts = {part.lower() for part in candidate_path.parts}
+    lowered_name = candidate_path.name.lower()
+    lowered_suffix = candidate_path.suffix.lower()
+    if lowered_name in FORBIDDEN_PATCH_FILENAMES:
+        return "benchmark/config/factor-set boundary"
+    if lowered_suffix in FORBIDDEN_PATCH_SUFFIXES:
+        return "baseline data/output artifact boundary"
+    blocked_parts = lowered_parts & FORBIDDEN_PATCH_PATH_PARTS
+    if blocked_parts:
+        return f"fixed boundary path component: {sorted(blocked_parts)[0]}"
+    return ""
+
+
+def _changed_files(workspace: Path) -> tuple[list[str], str]:
+    result = _git(workspace, ["-c", "core.quotePath=false", "diff", "--cached", "--name-only", "-z", "HEAD"], text=False)
+    if result.returncode != 0:
+        return [], result.stderr.decode("utf-8", errors="replace").strip()
+    raw_paths = result.stdout.decode("utf-8", errors="replace").split("\0")
+    return [_normalize_patch_path(path) for path in raw_paths if path.strip()], ""
+
+
+def _validate_patch_boundaries(changed_files: list[str]) -> list[str]:
+    violations: list[str] = []
+    for path in changed_files:
+        reason = _boundary_violation(path)
+        if reason:
+            violations.append(f"{path}: {reason}")
+    return violations
 
 
 def _prepare_workspace(source_root: Path, workspace: Path, *, refresh: bool) -> tuple[bool, str]:
@@ -328,45 +398,29 @@ def _prepare_workspace(source_root: Path, workspace: Path, *, refresh: bool) -> 
         shutil.copytree(source_root, workspace, ignore=ignore)
     except Exception as exc:
         return False, f"candidate workspace copy failed: {exc}"
-    init = subprocess.run(
-        ["git", "-C", str(workspace), "init"],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    init = _git(workspace, ["init"])
     if init.returncode != 0:
         return False, f"candidate workspace git init failed: {init.stderr.strip()}"
     subprocess.run(
-        ["git", "-C", str(workspace), "config", "user.email", "psi-auto-loop@example.invalid"],
+        ["git", "config", "user.email", "psi-auto-loop@example.invalid"],
+        cwd=str(workspace),
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
     subprocess.run(
-        ["git", "-C", str(workspace), "config", "user.name", "Psi Auto Loop"],
+        ["git", "config", "user.name", "Psi Auto Loop"],
+        cwd=str(workspace),
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
-    add = subprocess.run(
-        ["git", "-C", str(workspace), "add", "-A"],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    add = _git(workspace, ["add", "-A"])
     if add.returncode != 0:
         return False, f"candidate workspace git add failed: {add.stderr.strip()}"
-    commit = subprocess.run(
-        ["git", "-C", str(workspace), "commit", "-m", "psi candidate workspace base"],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    commit = _git(workspace, ["commit", "-m", "psi candidate workspace base"])
     if commit.returncode != 0:
         return False, f"candidate workspace git commit failed: {commit.stderr.strip()}"
     return True, ""
@@ -482,21 +536,19 @@ def materialize_candidate_patch(
     if rc != 0:
         return fail(f"patch command failed rc={rc}")
 
-    subprocess.run(
-        ["git", "-C", str(workspace), "add", "-A"],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    diff_cmd = ["git", "-C", str(workspace), "-c", "core.quotePath=false", "diff", "--cached", "--binary", "HEAD"]
-    if touched_files:
-        diff_cmd.extend(["--", *touched_files])
-    diff = subprocess.run(
-        diff_cmd,
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    add = _git(workspace, ["add", "-A"], text=False)
+    if add.returncode != 0:
+        return fail(f"candidate workspace git add failed: {add.stderr.decode('utf-8', errors='replace').strip()}")
+    actual_touched_files, changed_error = _changed_files(workspace)
+    if changed_error:
+        return fail(f"git changed-file scan failed: {changed_error}")
+    if not actual_touched_files:
+        return fail("patch materialization produced an empty diff")
+    boundary_violations = _validate_patch_boundaries(actual_touched_files)
+    if boundary_violations:
+        return fail("patch violates fixed boundary: " + "; ".join(boundary_violations))
+    diff_cmd = ["-c", "core.quotePath=false", "diff", "--cached", "--binary", "HEAD"]
+    diff = _git(workspace, diff_cmd, text=False)
     if diff.returncode != 0:
         return fail(f"git diff failed: {diff.stderr.decode('utf-8', errors='replace').strip()}")
     patch_body = diff.stdout
@@ -509,7 +561,7 @@ def materialize_candidate_patch(
         lane=candidate["lane"],
         hypothesis=candidate["hypothesis"],
         target=candidate["target"],
-        touched_files=touched_files,
+        touched_files=actual_touched_files,
         semantic_risk=candidate["semantic_risk"],
         stack_members=candidate.get("stack_members") or [],
         base_commit=str(metadata["base_commit"]),
@@ -523,6 +575,7 @@ def materialize_candidate_patch(
         patch_command_rc=rc,
         patch_source="candidate_workspace_git_diff",
     )
+    candidate["touched_files"] = actual_touched_files
     candidate["candidate_workspace"] = str(workspace)
     candidate["patch_path"] = str((run_dir / "patches" / f"{candidate['candidate_id']}.patch").resolve())
     candidate["base_commit"] = str(metadata["base_commit"])
@@ -1027,116 +1080,45 @@ def iteration_step(
     if candidate is None:
         return None, "", "no_targets" if lanes_are_empty(lanes) else "", lanes, {}
 
-    patch_body: str | None = None
-    if candidate["lane"] == "combination":
-        patch_body, missing = materialize_stack_patch(run_dir, candidate)
-        if missing:
-            batch_state = {
-                "status": "stopped",
-                "batch_status": "completed",
-                "iteration": iteration,
-                "candidate_id": candidate["candidate_id"],
-                "lane": candidate["lane"],
-                "target": candidate["target"],
-                "build_status": "not_run",
-                "compare_status": "needs_real_patch_body",
-                "timing_status": "rejected",
-                "comparison_accepted": False,
-                "control_samples_ms": [],
-                "candidate_samples_ms": [],
-                "control_median_ms": 0.0,
-                "candidate_median_ms": 0.0,
-                "delta_ms": 0.0,
-                "noise_flag": "not_run",
-                "patch_materialization_status": "missing",
-                "patch_materialization_reason": "; ".join(missing),
-            }
-            register_patch(
-                run_dir,
-                candidate_id=candidate["candidate_id"],
-                lane=candidate["lane"],
-                hypothesis=candidate["hypothesis"],
-                target=candidate["target"],
-                touched_files=candidate["touched_files"],
-                semantic_risk=candidate["semantic_risk"],
-                stack_members=candidate.get("stack_members") or [],
-                base_commit=os.environ.get("PSI_CONTROL_HEAD", "auto_loop"),
-                revert_method="not applicable; stack patch was not materialized",
-                patch_body="# stack patch not materialized: member patch body missing\n",
-                status="failed",
-            )
-            record_attempt(
-                run_dir,
-                iteration=iteration,
-                candidate=candidate,
-                batch_state=batch_state,
-                verdict="rejected",
-                retry_condition="neutral stack requires replayable member patch bodies before bundle audit",
-                stop_reason="",
-                notes=batch_state["patch_materialization_reason"],
-            )
-            return candidate, "rejected", "", lanes, batch_state
-
-    if patch_body:
-        patch_path = run_dir / "patches" / f"{candidate['candidate_id']}.patch"
-        register_patch(
+    materialized, patch_meta, patch_reason = materialize_candidate_patch(args, run_dir, candidate, iteration)
+    if not materialized:
+        candidate["candidate_workspace"] = str(patch_meta.get("candidate_workspace", ""))
+        candidate["patch_path"] = str(patch_meta.get("patch_path", ""))
+        candidate["base_commit"] = str(patch_meta.get("base_commit", ""))
+        batch_state = {
+            "status": "stopped",
+            "batch_status": "completed",
+            "iteration": iteration,
+            "candidate_id": candidate["candidate_id"],
+            "lane": candidate["lane"],
+            "target": candidate["target"],
+            "build_status": "not_run",
+            "compare_status": "not_run",
+            "timing_status": "needs_patch",
+            "timing_verdict": "needs_patch",
+            "comparison_accepted": False,
+            "paired_sample_count": 0,
+            "control_samples_ms": [],
+            "candidate_samples_ms": [],
+            "control_median_ms": 0.0,
+            "candidate_median_ms": 0.0,
+            "delta_ms": 0.0,
+            "noise_flag": "not_run",
+            "patch_materialization_status": "failed",
+            "patch_materialization_reason": patch_reason,
+        }
+        record_attempt(
             run_dir,
-            candidate_id=candidate["candidate_id"],
-            lane=candidate["lane"],
-            hypothesis=candidate["hypothesis"],
-            target=candidate["target"],
-            touched_files=candidate["touched_files"],
-            semantic_risk=candidate["semantic_risk"],
-            stack_members=candidate.get("stack_members") or [],
-            base_commit=os.environ.get("PSI_CONTROL_HEAD", "auto_loop"),
-            revert_method="git apply -R <patch_path>",
-            patch_body=patch_body,
-            status="pending",
-            patch_source="neutral_stack_member_patches",
-            materialization_status="materialized",
-            materialization_reason="combined replayable member patch bodies",
+            iteration=iteration,
+            candidate=candidate,
+            batch_state=batch_state,
+            verdict="needs_patch",
+            retry_condition=patch_reason,
+            stop_reason="",
+            notes="patch materialization failed before remote/build/timing",
         )
-        candidate["patch_path"] = str(patch_path.resolve())
-    else:
-        materialized, patch_meta, patch_reason = materialize_candidate_patch(args, run_dir, candidate, iteration)
-        if not materialized:
-            candidate["candidate_workspace"] = str(patch_meta.get("candidate_workspace", ""))
-            candidate["patch_path"] = str(patch_meta.get("patch_path", ""))
-            candidate["base_commit"] = str(patch_meta.get("base_commit", ""))
-            batch_state = {
-                "status": "stopped",
-                "batch_status": "completed",
-                "iteration": iteration,
-                "candidate_id": candidate["candidate_id"],
-                "lane": candidate["lane"],
-                "target": candidate["target"],
-                "build_status": "not_run",
-                "compare_status": "not_run",
-                "timing_status": "needs_patch",
-                "timing_verdict": "needs_patch",
-                "comparison_accepted": False,
-                "paired_sample_count": 0,
-                "control_samples_ms": [],
-                "candidate_samples_ms": [],
-                "control_median_ms": 0.0,
-                "candidate_median_ms": 0.0,
-                "delta_ms": 0.0,
-                "noise_flag": "not_run",
-                "patch_materialization_status": "failed",
-                "patch_materialization_reason": patch_reason,
-            }
-            record_attempt(
-                run_dir,
-                iteration=iteration,
-                candidate=candidate,
-                batch_state=batch_state,
-                verdict="needs_patch",
-                retry_condition=patch_reason,
-                stop_reason="",
-                notes="patch materialization failed before remote/build/timing",
-            )
-            set_patch_status(run_dir, candidate["candidate_id"], "failed", note=patch_reason)
-            return candidate, "needs_patch", "", lanes, batch_state
+        set_patch_status(run_dir, candidate["candidate_id"], "failed", note=patch_reason)
+        return candidate, "needs_patch", "", lanes, batch_state
 
     update_heartbeat(run_dir, "remote_batch", f"running iteration {iteration} candidate {candidate['candidate_id']}")
     rc, _iter_dir, batch_state = call_remote_batch(args, run_dir, candidate, iteration)
