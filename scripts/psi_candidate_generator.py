@@ -24,12 +24,14 @@ neutral-pool member).
 from __future__ import annotations
 
 import csv
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
 
 SEMANTIC_RISK_ORDER = {"none": 0, "low": 1, "medium": 2, "high": 3, "unknown": 2}
+PROJECTION_PRUNE_CLASS = "readParquet_projection_prune_with_manual_column_remap"
 
 
 def _rank_risk(value: str) -> int:
@@ -82,6 +84,91 @@ def read_tsv(path: Path) -> list[dict[str, str]]:
         return []
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         return list(csv.DictReader(handle, delimiter="\t"))
+
+
+def read_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8-sig") as handle:
+        payload = json.load(handle)
+    return payload if isinstance(payload, dict) else {}
+
+
+def _ledger_blocked_ids(ledger: dict[str, Any]) -> set[str]:
+    blocked: set[str] = set()
+    for section in ("non_retry_candidates", "not_run_candidates"):
+        for row in ledger.get(section, []) or []:
+            candidate_id = str(row.get("candidate_id") or "").strip()
+            if candidate_id:
+                blocked.add(candidate_id)
+    for row in ledger.get("blocked_candidate_classes", []) or []:
+        for example in row.get("examples", []) or []:
+            example_id = str(example or "").strip()
+            if example_id:
+                blocked.add(example_id)
+    return blocked
+
+
+def _ledger_blocked_classes(ledger: dict[str, Any]) -> set[str]:
+    return {
+        str(row.get("class") or "").strip()
+        for row in ledger.get("blocked_candidate_classes", []) or []
+        if str(row.get("class") or "").strip()
+    }
+
+
+def _candidate_text(candidate: Candidate | dict[str, Any]) -> str:
+    if isinstance(candidate, Candidate):
+        payload = candidate.to_dict()
+    else:
+        payload = candidate
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True).lower()
+
+
+def _is_projection_prune_manual_remap(candidate: Candidate | dict[str, Any]) -> bool:
+    text = _candidate_text(candidate)
+    return (
+        ("projection" in text or "_columns" in text)
+        and ("prune" in text or "remove column" in text or "drop column" in text)
+        and ("remap" in text or "table->column" in text or "column index" in text)
+    )
+
+
+def _candidate_allowed_by_ledger(candidate: Candidate, ledger: dict[str, Any]) -> bool:
+    if not ledger:
+        return True
+
+    blocked_ids = _ledger_blocked_ids(ledger)
+    identifiers = {
+        candidate.candidate_id,
+        candidate.target,
+        *candidate.stack_members,
+    }
+    source = candidate.source_evidence or {}
+    for key in ("candidate_id", "target", "source_candidate_id"):
+        value = str(source.get(key) or "").strip()
+        if value:
+            identifiers.add(value)
+    if any(identifier in blocked_ids for identifier in identifiers if identifier):
+        return False
+
+    blocked_classes = _ledger_blocked_classes(ledger)
+    if PROJECTION_PRUNE_CLASS in blocked_classes and _is_projection_prune_manual_remap(candidate):
+        return False
+
+    return True
+
+
+def _apply_candidate_ledger(
+    lanes: dict[str, list[Candidate]],
+    ledger: dict[str, Any],
+) -> dict[str, list[Candidate]]:
+    if not ledger:
+        return lanes
+    return {
+        lane: [candidate for candidate in candidates if _candidate_allowed_by_ledger(candidate, ledger)]
+        for lane, candidates in lanes.items()
+    }
 
 
 def _safe_token(text: str) -> str:
@@ -451,6 +538,7 @@ def generate_candidates(
     combination_max_members: int = 3,
     retry_ready_targets: set[str] | None = None,
     retry_top_k: int = 1,
+    candidate_ledger_path: Path | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Produce the lane-split candidate queue for this run.
 
@@ -498,10 +586,18 @@ def generate_candidates(
         max_combinations=combination_top_k,
         max_members=combination_max_members,
     )
+    lanes = _apply_candidate_ledger(
+        {
+            "evidence": evidence,
+            "insight": insight,
+            "combination": combination,
+        },
+        read_json(candidate_ledger_path) if candidate_ledger_path else {},
+    )
     return {
-        "evidence": [c.to_dict() for c in evidence],
-        "insight": [c.to_dict() for c in insight],
-        "combination": [c.to_dict() for c in combination],
+        "evidence": [c.to_dict() for c in lanes["evidence"]],
+        "insight": [c.to_dict() for c in lanes["insight"]],
+        "combination": [c.to_dict() for c in lanes["combination"]],
     }
 
 

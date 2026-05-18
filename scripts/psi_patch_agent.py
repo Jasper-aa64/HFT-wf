@@ -21,6 +21,7 @@ Environment variables consumed:
   PSI_SOURCE_ROOT            - original source tree (read-only reference)
   PSI_RUN_DIR                - run root for logs/artifacts
   PSI_ITERATION              - current iteration number
+  PSI_CANDIDATE_LEDGER       - optional task-level ledger with blocked classes
 
 Configuration:
   PSI_PATCH_AGENT_MODE       - "api" (default), "cli", or "template"
@@ -58,12 +59,74 @@ def load_candidate_context() -> dict[str, Any]:
         "source_root": os.environ.get("PSI_SOURCE_ROOT", ""),
         "run_dir": os.environ.get("PSI_RUN_DIR", ""),
         "iteration": os.environ.get("PSI_ITERATION", "0"),
+        "candidate_ledger": os.environ.get("PSI_CANDIDATE_LEDGER", ""),
         "hypothesis": metadata.get("hypothesis", ""),
         "expected_effect": metadata.get("expected_effect", ""),
         "semantic_risk": metadata.get("semantic_risk", ""),
         "stack_members": metadata.get("stack_members", []),
         "source_evidence": metadata.get("source_evidence", {}),
     }
+
+
+def load_candidate_ledger(path: str) -> dict[str, Any]:
+    if not path:
+        return {}
+    ledger_path = Path(path)
+    if not ledger_path.exists():
+        return {}
+    try:
+        payload = json.loads(ledger_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def ledger_prompt_constraints(ledger: dict[str, Any]) -> str:
+    if not ledger:
+        return ""
+
+    positive_retry = [
+        str(row.get("candidate_id") or "").strip()
+        for row in ledger.get("quiet_window_retry_queue", []) or []
+        if str(row.get("candidate_id") or "").strip()
+    ]
+    blocked = [
+        str(row.get("candidate_id") or "").strip()
+        for section in ("non_retry_candidates", "not_run_candidates")
+        for row in ledger.get(section, []) or []
+        if str(row.get("candidate_id") or "").strip()
+    ]
+    blocked_classes = [
+        str(row.get("class") or "").strip()
+        for row in ledger.get("blocked_candidate_classes", []) or []
+        if str(row.get("class") or "").strip()
+    ]
+
+    lines = ["## Candidate Ledger Constraints"]
+    if positive_retry:
+        lines.append(
+            "- These candidates are positive but NOISY_PENDING and may only be repeated by the harness quiet-window retry path: "
+            + ", ".join(positive_retry)
+            + ". Do not recreate them as a new immediate candidate."
+        )
+    if blocked:
+        lines.append(
+            "- These candidates are blocked or non-retry and must not be regenerated: "
+            + ", ".join(blocked)
+            + "."
+        )
+    if blocked_classes:
+        lines.append(
+            "- These candidate classes are blocked until redesigned: "
+            + ", ".join(blocked_classes)
+            + "."
+        )
+    if "readParquet_projection_prune_with_manual_column_remap" in blocked_classes:
+        lines.append(
+            "- Specifically, do not prune the readParquet projection column list and manually remap table->column indices. "
+            "Leave the projection contract unchanged unless the harness explicitly asks for a redesigned projection-index abstraction."
+        )
+    return "\n".join(lines)
 
 
 def find_relevant_sources(workspace: Path, target: str, touched_files: list[str]) -> dict[str, str]:
@@ -116,6 +179,7 @@ def build_optimization_prompt(ctx: dict[str, Any], sources: dict[str, str]) -> s
         source_blocks.append(f"### {path}\n```cpp\n{content}\n```")
 
     sources_text = "\n\n".join(source_blocks)
+    ledger_constraints = ledger_prompt_constraints(load_candidate_ledger(ctx.get("candidate_ledger", "")))
     stack_members = ctx.get("stack_members") or []
     stack_context = ""
     if ctx.get("lane") == "combination" or stack_members:
@@ -145,6 +209,8 @@ Generate an optimized version of the target code. The optimization must be:
 
 ## Source Evidence
 {json.dumps(ctx.get('source_evidence', {}), indent=2)}
+
+{ledger_constraints}
 
 ## Source Files
 {sources_text}

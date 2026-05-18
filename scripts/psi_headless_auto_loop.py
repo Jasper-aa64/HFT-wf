@@ -684,6 +684,7 @@ def _run_external_patch_command(
             "PSI_SOURCE_ROOT": str(source_root),
             "PSI_RUN_DIR": str(run_dir),
             "PSI_ITERATION": str(iteration),
+            "PSI_CANDIDATE_LEDGER": str(args.candidate_ledger) if getattr(args, "candidate_ledger", "") else "",
         }
     )
     completed = subprocess.run(
@@ -1409,7 +1410,11 @@ def iteration_step(
     control_distribution = refresh_control_distribution(run_dir, host_key)
     retry_ready_targets = quiet_retry_ready_targets(args, run_dir, control_distribution)
     update_heartbeat(run_dir, "generate", "building three-lane candidate queue")
-    lanes = generate_candidates(run_dir, retry_ready_targets=retry_ready_targets)
+    lanes = generate_candidates(
+        run_dir,
+        retry_ready_targets=retry_ready_targets,
+        candidate_ledger_path=Path(args.candidate_ledger) if args.candidate_ledger else None,
+    )
     # Persist a snapshot of the lane queue for this iteration.
     iteration_dir = run_dir / "iterations" / f"iter_{iteration:03d}_plan"
     iteration_dir.mkdir(parents=True, exist_ok=True)
@@ -1556,6 +1561,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-root", default="", help="Root of the Psi source tree to copy into candidate workspaces.")
     parser.add_argument("--candidate-workspace", default="", help="Override candidate workspace base path (default: <run-dir>/candidate_workspaces/<id>).")
     parser.add_argument("--reuse-candidate-workspace", action="store_true", help="Skip workspace refresh if it already exists.")
+    parser.add_argument("--candidate-ledger", default="", help="Optional JSON ledger of blocked, retry-only, and non-retry Psi candidates/classes.")
     return parser
 
 
