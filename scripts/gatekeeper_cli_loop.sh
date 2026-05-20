@@ -4,7 +4,7 @@
 #
 # Architecture:
 #   Critic-Prep = Codex CLI (generates checklist before patch)
-#   Builder     = Claude Code CLI (Read, Edit, Write only — no Bash)
+#   Builder     = Claude Code CLI or Codex CLI (provider is configurable)
 #   Executor    = scripts/ from this project only
 #   Critic-Review = Codex CLI (verifies patch against pre-written checklist)
 #   Human       = reads final decision package
@@ -27,16 +27,17 @@
 #
 # Requirements:
 #   - Must run in a git repository
-#   - Claude Code and Codex CLI must be authenticated
+#   - Selected Builder CLI and Codex CLI must be authenticated
 #
 # Usage:
-#   ./scripts/gatekeeper_cli_loop.sh [--apply] [--max-attempts N] <brief.md>
+#   ./scripts/gatekeeper_cli_loop.sh [--apply] [--max-attempts N] [--project-root PATH] <brief.md>
 #
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SCRIPT_PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROOT="$SCRIPT_PROJECT_ROOT"
 RUNS_DIR="$PROJECT_ROOT/gatekeeper_runs"
 WORKTREES_DIR="$PROJECT_ROOT/.gatekeeper_worktrees"
 
@@ -45,15 +46,33 @@ WORKTREES_DIR="$PROJECT_ROOT/.gatekeeper_worktrees"
 AUTO_APPLY=0
 MAX_ATTEMPTS=3
 BRIEF_FILE=""
+CLAUDE_MODEL="${GATEKEEPER_CLAUDE_MODEL:-sonnet}"
+BUILDER_PROVIDER="${GATEKEEPER_BUILDER:-claude}"
+CODEX_BUILDER_MODEL="${GATEKEEPER_CODEX_BUILDER_MODEL:-}"
+REPORT_FORMAT="${GATEKEEPER_REPORT_FORMAT:-none}"
+PREP_FILE_LIMIT="${GATEKEEPER_PREP_FILE_LIMIT:-16000}"
+TEMP_COMPAT_BIN=""
+
+normalize_path() {
+    local raw="$1"
+    if command -v cygpath &>/dev/null; then
+        cygpath -u "$raw" 2>/dev/null || printf '%s\n' "$raw"
+    else
+        printf '%s\n' "$raw"
+    fi
+}
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --help|-h)
-            echo "Usage: $0 [--apply] [--max-attempts N] <brief.md>"
+            echo "Usage: $0 [--apply] [--max-attempts N] [--builder claude|codex] [--project-root PATH] [--report FORMAT] <brief.md>"
             echo ""
             echo "Options:"
             echo "  --apply            On APPROVE, automatically copy changes to main worktree"
             echo "  --max-attempts N   Maximum Builder attempts (default: 3, min: 1)"
+            echo "  --builder NAME     Builder provider: claude or codex (default: claude)"
+            echo "  --project-root PATH Project repo to operate on (default: parent of this script)"
+            echo "  --report FORMAT    Generate final report: none, docx, md-pdf, all (default: none)"
             echo "  --help, -h         Show this help message"
             echo ""
             echo "Without --apply, approved changes remain in the worktree for manual review."
@@ -94,13 +113,53 @@ EXAMPLE
             MAX_ATTEMPTS="$2"
             shift 2
             ;;
+        --report)
+            if [[ $# -lt 2 ]]; then
+                echo "ERROR: --report requires a value"
+                exit 1
+            fi
+            case "$2" in
+                none|docx|md-pdf|all)
+                    REPORT_FORMAT="$2"
+                    ;;
+                *)
+                    echo "ERROR: --report must be one of: none, docx, md-pdf, all"
+                    exit 1
+                    ;;
+            esac
+            shift 2
+            ;;
+        --builder)
+            if [[ $# -lt 2 ]]; then
+                echo "ERROR: --builder requires a value"
+                exit 1
+            fi
+            case "$2" in
+                claude|codex)
+                    BUILDER_PROVIDER="$2"
+                    ;;
+                *)
+                    echo "ERROR: --builder must be one of: claude, codex"
+                    exit 1
+                    ;;
+            esac
+            shift 2
+            ;;
+        --project-root)
+            if [[ $# -lt 2 ]]; then
+                echo "ERROR: --project-root requires a value"
+                exit 1
+            fi
+            PROJECT_ROOT="$(normalize_path "$2")"
+            shift 2
+            ;;
         -*)
             echo "ERROR: Unknown option: $1"
             echo "Use --help for usage"
             exit 1
             ;;
         *)
-            BRIEF_FILE="$1"
+            BRIEF_FILE="$(normalize_path "$1")"
             shift
             ;;
     esac
@@ -113,19 +172,30 @@ if [[ "$MAX_ATTEMPTS" -lt 1 ]]; then
 fi
 
 if [[ -z "$BRIEF_FILE" ]]; then
-    echo "Usage: $0 [--apply] [--max-attempts N] <brief.md>"
+    echo "Usage: $0 [--apply] [--max-attempts N] [--builder claude|codex] [--project-root PATH] [--report FORMAT] <brief.md>"
     echo ""
     echo "Options:"
     echo "  --apply            On APPROVE, automatically copy changes to main worktree"
     echo "  --max-attempts N   Maximum Builder attempts (default: 3, min: 1)"
+    echo "  --builder NAME     Builder provider: claude or codex (default: claude)"
+    echo "  --project-root PATH Project repo to operate on (default: parent of this script)"
+    echo "  --report FORMAT    Generate final report: none, docx, md-pdf, all (default: none)"
     echo ""
     echo "Use --help for more details."
     exit 1
 fi
 
+PROJECT_ROOT="$(cd "$PROJECT_ROOT" && pwd)"
+RUNS_DIR="$PROJECT_ROOT/gatekeeper_runs"
+WORKTREES_DIR="$PROJECT_ROOT/.gatekeeper_worktrees"
+
 if [[ ! -f "$BRIEF_FILE" ]]; then
-    echo "Error: Brief file not found: $BRIEF_FILE"
-    exit 1
+    if [[ -f "$PROJECT_ROOT/$BRIEF_FILE" ]]; then
+        BRIEF_FILE="$PROJECT_ROOT/$BRIEF_FILE"
+    else
+        echo "Error: Brief file not found: $BRIEF_FILE"
+        exit 1
+    fi
 fi
 
 # Validate max-attempts
@@ -141,13 +211,16 @@ extract_allowed_files() {
     local files=()
 
     while IFS= read -r line; do
+        line="${line%$'\r'}"
         if [[ "$line" =~ ^allowed_files: ]]; then
             in_allowed=1
             continue
         fi
         if [[ $in_allowed -eq 1 ]]; then
             if [[ "$line" =~ ^[[:space:]]*-[[:space:]]*(.+)$ ]]; then
-                files+=("${BASH_REMATCH[1]}")
+                local file="${BASH_REMATCH[1]}"
+                file="${file%$'\r'}"
+                files+=("$file")
             elif [[ ! "$line" =~ ^[[:space:]] ]]; then
                 break
             fi
@@ -163,10 +236,12 @@ verify_allowed_files() {
     local violations=()
 
     while IFS= read -r changed; do
+        changed="${changed%$'\r'}"
         [[ -z "$changed" ]] && continue
 
         local allowed=0
         while IFS= read -r pattern; do
+            pattern="${pattern%$'\r'}"
             [[ -z "$pattern" ]] && continue
             if [[ "$changed" == $pattern ]]; then
                 allowed=1
@@ -220,7 +295,113 @@ $summary
 - patch.diff
 - eval.log
 - critic.md
+- retry_evidence.md (when rejected)
 DECISION
+}
+
+write_retry_evidence() {
+    local attempt_dir="$1"
+    local gate="$2"
+    local summary="$3"
+
+    cat > "$attempt_dir/retry_evidence.md" << EVIDENCE
+# Retry Evidence
+
+## Verdict
+REJECT
+
+## Failed Gate
+$gate
+
+## Summary
+$summary
+
+## Missing Proof
+See the artifacts below for the exact failed command, scope violation, or critic finding.
+
+## Evidence Artifacts
+EVIDENCE
+
+    if [[ -f "$attempt_dir/builder.log" ]]; then
+        echo "- builder.log" >> "$attempt_dir/retry_evidence.md"
+    fi
+    if [[ -f "$attempt_dir/eval.log" ]]; then
+        echo "- eval.log" >> "$attempt_dir/retry_evidence.md"
+    fi
+    if [[ -f "$attempt_dir/critic.md" ]]; then
+        echo "- critic.md" >> "$attempt_dir/retry_evidence.md"
+    fi
+    if [[ -f "$attempt_dir/patch.diff" ]]; then
+        echo "- patch.diff" >> "$attempt_dir/retry_evidence.md"
+    fi
+
+    cat >> "$attempt_dir/retry_evidence.md" << EVIDENCE
+
+## Expected Evidence Shape
+- Patch stays inside allowed files.
+- Executor exits 0 and writes enough log output to prove the required behavior.
+- Critic-Review can cite patch or executor evidence for every checklist item.
+
+## Next Action
+Revise the patch to address the rejected gate. Do not repeat the previous patch blindly.
+EVIDENCE
+
+    if [[ -f "$attempt_dir/changed_files.txt" ]]; then
+        cat >> "$attempt_dir/retry_evidence.md" << EVIDENCE
+
+## Changed Files
+\`\`\`text
+$(cat "$attempt_dir/changed_files.txt")
+\`\`\`
+EVIDENCE
+    fi
+
+    if [[ -f "$attempt_dir/builder.log" && "$gate" == "BUILDER" ]]; then
+        cat >> "$attempt_dir/retry_evidence.md" << EVIDENCE
+
+## Builder Log Tail
+\`\`\`text
+$(tail -80 "$attempt_dir/builder.log")
+\`\`\`
+EVIDENCE
+    fi
+
+    if [[ -f "$attempt_dir/eval.log" && "$gate" == "EXECUTOR" ]]; then
+        cat >> "$attempt_dir/retry_evidence.md" << EVIDENCE
+
+## Executor Log Tail
+\`\`\`text
+$(tail -120 "$attempt_dir/eval.log")
+\`\`\`
+EVIDENCE
+    fi
+
+    if [[ -f "$attempt_dir/critic.md" && "$gate" == "CRITIC" ]]; then
+        local critic_retry
+        critic_retry=$(awk '
+            BEGIN { capture=0 }
+            /^#+[[:space:]]*Retry Evidence/ { capture=1; print; next }
+            capture && /^#+[[:space:]]/ { exit }
+            capture { print }
+        ' "$attempt_dir/critic.md")
+        if [[ -n "$critic_retry" ]]; then
+            cat >> "$attempt_dir/retry_evidence.md" << EVIDENCE
+
+## Critic Retry Evidence
+\`\`\`markdown
+$critic_retry
+\`\`\`
+EVIDENCE
+        else
+            cat >> "$attempt_dir/retry_evidence.md" << EVIDENCE
+
+## Critic Summary
+\`\`\`text
+$summary
+\`\`\`
+EVIDENCE
+        fi
+    fi
 }
 
 # Write final decision
@@ -280,8 +461,76 @@ See: $run_dir/attempt-$attempts_used/eval.log
 
 ## Last Critic Notes
 See: $run_dir/attempt-$attempts_used/critic.md
+
+## Last Retry Evidence
+See: $run_dir/attempt-$attempts_used/retry_evidence.md
 CLEANUP
     fi
+}
+
+cleanup_temp_compat() {
+    if [[ -n "$TEMP_COMPAT_BIN" && -d "$TEMP_COMPAT_BIN" ]]; then
+        rm -rf "$TEMP_COMPAT_BIN"
+    fi
+}
+trap cleanup_temp_compat EXIT
+
+ensure_python3() {
+    if command -v python3 &>/dev/null && python3 - <<'PY' >/dev/null 2>&1
+import sys
+print(sys.version)
+PY
+    then
+        return 0
+    fi
+
+    if command -v python &>/dev/null; then
+        TEMP_COMPAT_BIN="$(mktemp -d)"
+        cat > "$TEMP_COMPAT_BIN/python3" <<'PYWRAP'
+#!/usr/bin/env bash
+python "$@"
+PYWRAP
+        chmod +x "$TEMP_COMPAT_BIN/python3"
+        export PATH="$TEMP_COMPAT_BIN:$PATH"
+        echo "WARN: python3 was unavailable; using python via compatibility wrapper"
+        return 0
+    fi
+
+    echo "WARN: neither python3 nor python is available; Python-based evaluators/reports may fail"
+}
+
+generate_report() {
+    local run_dir="$1"
+    local format="$2"
+    [[ "$format" == "none" ]] && return 0
+
+    local reporter="$SCRIPT_PROJECT_ROOT/scripts/gatekeeper_report.py"
+    if [[ ! -f "$reporter" ]]; then
+        echo "WARN: report requested but reporter is missing: $reporter"
+        return 0
+    fi
+
+    echo ""
+    echo ">>> Generating GateKeeper report ($format)"
+    if ! python3 "$reporter" "$run_dir" --format "$format"; then
+        echo "WARN: report generation failed"
+    fi
+}
+
+append_file_utf8_safe() {
+    local path="$1"
+    local limit="${2:-0}"
+    python3 - "$path" "$limit" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+limit = int(sys.argv[2])
+data = path.read_bytes()
+if limit > 0:
+    data = data[:limit]
+sys.stdout.buffer.write(data.decode("utf-8", errors="replace").encode("utf-8"))
+PY
 }
 
 # ── Pre-flight Checks ────────────────────────────────────────────────────────
@@ -298,23 +547,36 @@ if ! git -C "$PROJECT_ROOT" rev-parse --git-dir &>/dev/null; then
     exit 1
 fi
 
-# Check CLI availability
-if ! command -v claude &>/dev/null; then
-    echo "ERROR: claude CLI not found"
-    echo "Install: npm install -g @anthropic-ai/claude-code"
-    exit 1
-fi
-
 if ! command -v codex &>/dev/null; then
     echo "ERROR: codex CLI not found"
     echo "Install: npm install -g @openai/codex"
     exit 1
 fi
 
+if [[ "$BUILDER_PROVIDER" == "claude" ]] && ! command -v claude &>/dev/null; then
+    echo "ERROR: claude CLI not found, but --builder claude was selected"
+    echo "Install: npm install -g @anthropic-ai/claude-code"
+    echo "Or run with: --builder codex"
+    exit 1
+fi
+
 echo "✓ Git repository: OK"
-echo "✓ Claude Code: $(claude --version | head -1)"
 echo "✓ Codex CLI: $(codex --version)"
+echo "✓ Builder provider: $BUILDER_PROVIDER"
+if [[ "$BUILDER_PROVIDER" == "claude" ]]; then
+    echo "✓ Claude Code: $(claude --version | head -1)"
+    echo "✓ Claude model: $CLAUDE_MODEL"
+else
+    if [[ -n "$CODEX_BUILDER_MODEL" ]]; then
+        echo "✓ Codex builder model: $CODEX_BUILDER_MODEL"
+    else
+        echo "✓ Codex builder model: CLI default"
+    fi
+    echo "WARN: Builder and Critic both use Codex CLI; this preserves artifact isolation but is not heterogeneous review."
+fi
 echo "✓ Max attempts: $MAX_ATTEMPTS"
+echo "Report format: $REPORT_FORMAT"
+echo "Critic-prep file limit: $PREP_FILE_LIMIT bytes per file"
 if [[ $AUTO_APPLY -eq 1 ]]; then
     echo "✓ Auto-apply: ENABLED"
 else
@@ -324,7 +586,9 @@ echo ""
 
 # ── Parse Brief ───────────────────────────────────────────────────────────────
 
-EVAL_SCRIPT=$(grep -E "^eval_script:" "$BRIEF_FILE" | head -1 | sed 's/^eval_script: *//' || true)
+ensure_python3
+
+EVAL_SCRIPT=$(grep -E "^eval_script:" "$BRIEF_FILE" | head -1 | sed 's/^eval_script: *//' | tr -d '\r' || true)
 
 if [[ -z "$EVAL_SCRIPT" ]]; then
     echo "ERROR: brief must specify eval_script"
@@ -332,8 +596,8 @@ if [[ -z "$EVAL_SCRIPT" ]]; then
     exit 1
 fi
 
-if [[ "$EVAL_SCRIPT" != scripts/* ]]; then
-    echo "ERROR: eval_script must be under scripts/ directory"
+if [[ "$EVAL_SCRIPT" = /* || "$EVAL_SCRIPT" == *..* ]]; then
+    echo "ERROR: eval_script must be a project-relative path without '..'"
     echo "Got: $EVAL_SCRIPT"
     exit 1
 fi
@@ -421,7 +685,7 @@ echo ">>> Phase 0: Critic-Prep (Generate Checklist)"
 # Build critic-prep prompt
 # Include current state of allowed target files if they exist
 cat > "$RUN_DIR/critic_prep_prompt.md" << 'CRITIC_PREP_HEADER'
-You are the Critic-Prep in an GateKeeper workflow.
+You are the Critic-Prep in a GateKeeper workflow.
 
 Your job: Before any code is written, define what evidence proves the task is complete.
 
@@ -454,7 +718,10 @@ CRITIC_PREP_BRIEF
 
 cat "$RUN_DIR/allowed_files.txt" >> "$RUN_DIR/critic_prep_prompt.md"
 
-# Add current contents of allowed target files if they exist
+# Add bounded current contents of allowed target files if they exist.
+# Large repositories can make Critic-Prep unusable if every allowed file is
+# pasted in full. The checklist should be based on the brief and scoped context,
+# not megabytes of generated code.
 echo "" >> "$RUN_DIR/critic_prep_prompt.md"
 echo "## Current Target File Contents" >> "$RUN_DIR/critic_prep_prompt.md"
 echo "" >> "$RUN_DIR/critic_prep_prompt.md"
@@ -464,8 +731,14 @@ while IFS= read -r target_file; do
     # Check in worktree
     if [[ -f "$WORKTREE_PATH/$target_file" ]]; then
         echo "### $target_file" >> "$RUN_DIR/critic_prep_prompt.md"
+        local_size=$(wc -c < "$WORKTREE_PATH/$target_file" | tr -d '[:space:]')
+        echo "File size: ${local_size} bytes" >> "$RUN_DIR/critic_prep_prompt.md"
+        if [[ "$local_size" -gt "$PREP_FILE_LIMIT" ]]; then
+            echo "Content below is truncated to first ${PREP_FILE_LIMIT} bytes for Critic-Prep." >> "$RUN_DIR/critic_prep_prompt.md"
+        fi
         echo '```' >> "$RUN_DIR/critic_prep_prompt.md"
-        cat "$WORKTREE_PATH/$target_file" >> "$RUN_DIR/critic_prep_prompt.md"
+        append_file_utf8_safe "$WORKTREE_PATH/$target_file" "$PREP_FILE_LIMIT" >> "$RUN_DIR/critic_prep_prompt.md"
+        echo "" >> "$RUN_DIR/critic_prep_prompt.md"
         echo '```' >> "$RUN_DIR/critic_prep_prompt.md"
         echo "" >> "$RUN_DIR/critic_prep_prompt.md"
     fi
@@ -504,7 +777,8 @@ codex exec \
     --sandbox read-only \
     --skip-git-repo-check \
     -o "$RUN_DIR/critic_checklist.md" \
-    "$(cat "$RUN_DIR/critic_prep_prompt.md")" \
+    - \
+    < "$RUN_DIR/critic_prep_prompt.md" \
     > "$RUN_DIR/critic_prep.log" 2>&1
 CRITIC_PREP_EXIT=$?
 set -e
@@ -610,15 +884,15 @@ while [[ $ATTEMPT -le $MAX_ATTEMPTS ]]; do
         reset_worktree "$WORKTREE_PATH" "$ORIGINAL_COMMIT"
     fi
 
-    # ── Phase 1: Builder (Claude Code) ───────────────────────────────────────────
+    # ── Phase 1: Builder ───────────────────────────────────────────────────────
 
     echo ""
-    echo ">>> Phase 1: Builder (Claude Code)"
+    echo ">>> Phase 1: Builder ($BUILDER_PROVIDER)"
 
     # Build prompt - original for first attempt, retry prompt for subsequent
     if [[ $ATTEMPT -eq 1 ]]; then
         cat > "$ATTEMPT_DIR/builder_prompt.md" << PROMPT
-You are the Builder in an GateKeeper workflow.
+You are the Builder in a GateKeeper workflow.
 
 Your job: Write the smallest patch that satisfies the task.
 
@@ -627,7 +901,7 @@ $(cat "$RUN_DIR/brief.md")
 Rules:
 - Make the smallest patch that satisfies the task.
 - Edit ONLY the allowed files. Changing other files will cause automatic rejection.
-- Do not run any shell commands or tests.
+- Do not run tests or broad commands; the Executor will run the evaluator.
 - Do not commit.
 - Do not run broad refactors.
 - After editing, output a summary of changed files.
@@ -642,7 +916,7 @@ PROMPT
 
         # Build retry prompt incrementally (like critic_prompt.md)
         cat > "$ATTEMPT_DIR/builder_prompt.md" << 'RETRY_HEADER'
-You are the Builder in an GateKeeper workflow.
+You are the Builder in a GateKeeper workflow.
 
 Previous attempt was rejected.
 RETRY_HEADER
@@ -653,30 +927,16 @@ Attempt: $ATTEMPT of $MAX_ATTEMPTS
 RETRY_ATTEMPT
 
         echo "" >> "$ATTEMPT_DIR/builder_prompt.md"
-        echo "Reason:" >> "$ATTEMPT_DIR/builder_prompt.md"
-        if [[ -f "$PREV_DIR/summary.txt" ]]; then
+        echo "Retry evidence:" >> "$ATTEMPT_DIR/builder_prompt.md"
+        echo '```markdown' >> "$ATTEMPT_DIR/builder_prompt.md"
+        if [[ -f "$PREV_DIR/retry_evidence.md" ]]; then
+            cat "$PREV_DIR/retry_evidence.md" >> "$ATTEMPT_DIR/builder_prompt.md"
+        elif [[ -f "$PREV_DIR/summary.txt" ]]; then
             cat "$PREV_DIR/summary.txt" >> "$ATTEMPT_DIR/builder_prompt.md"
         else
-            echo "Unknown" >> "$ATTEMPT_DIR/builder_prompt.md"
+            echo "Previous attempt was rejected, but no structured retry evidence was available." >> "$ATTEMPT_DIR/builder_prompt.md"
         fi
-
-        # Add executor log if exists
-        if [[ -f "$PREV_DIR/eval.log" ]]; then
-            echo "" >> "$ATTEMPT_DIR/builder_prompt.md"
-            echo "Executor log:" >> "$ATTEMPT_DIR/builder_prompt.md"
-            echo '```' >> "$ATTEMPT_DIR/builder_prompt.md"
-            cat "$PREV_DIR/eval.log" >> "$ATTEMPT_DIR/builder_prompt.md"
-            echo '```' >> "$ATTEMPT_DIR/builder_prompt.md"
-        fi
-
-        # Add critic notes if exists
-        if [[ -f "$PREV_DIR/critic.md" ]]; then
-            echo "" >> "$ATTEMPT_DIR/builder_prompt.md"
-            echo "Critic notes:" >> "$ATTEMPT_DIR/builder_prompt.md"
-            echo '```' >> "$ATTEMPT_DIR/builder_prompt.md"
-            cat "$PREV_DIR/critic.md" >> "$ATTEMPT_DIR/builder_prompt.md"
-            echo '```' >> "$ATTEMPT_DIR/builder_prompt.md"
-        fi
+        echo '```' >> "$ATTEMPT_DIR/builder_prompt.md"
 
         # Add previous patch if exists
         if [[ -f "$PREV_DIR/patch.diff" ]]; then
@@ -709,27 +969,38 @@ Write the smallest patch that satisfies the task and addresses the rejection rea
 Rules:
 - Make the smallest patch that satisfies the task.
 - Edit ONLY the allowed files. Changing other files will cause automatic rejection.
-- Do not run any shell commands or tests.
+- Do not run tests or broad commands; the Executor will run the evaluator.
 - Do not commit.
 - Do not run broad refactors.
 - After editing, output a summary of changed files.
 RETRY_FOOTER
     fi
 
-    echo "Running Claude Code in worktree..."
+    echo "Running Builder ($BUILDER_PROVIDER) in worktree..."
     cd "$WORKTREE_PATH"
 
     set +e
-    claude --print --allowedTools "Read,Edit,Write" -p "$(cat "$ATTEMPT_DIR/builder_prompt.md")" 2>&1 | tee "$ATTEMPT_DIR/builder.log"
-    CLAUDE_EXIT=$?
+    if [[ "$BUILDER_PROVIDER" == "claude" ]]; then
+        claude --model "$CLAUDE_MODEL" --print --allowedTools "Read,Edit,Write" -p "$(cat "$ATTEMPT_DIR/builder_prompt.md")" 2>&1 | tee "$ATTEMPT_DIR/builder.log"
+        BUILDER_EXIT=$?
+    else
+        if [[ -n "$CODEX_BUILDER_MODEL" ]]; then
+            codex exec --model "$CODEX_BUILDER_MODEL" --sandbox workspace-write --skip-git-repo-check - < "$ATTEMPT_DIR/builder_prompt.md" 2>&1 | tee "$ATTEMPT_DIR/builder.log"
+            BUILDER_EXIT=$?
+        else
+            codex exec --sandbox workspace-write --skip-git-repo-check - < "$ATTEMPT_DIR/builder_prompt.md" 2>&1 | tee "$ATTEMPT_DIR/builder.log"
+            BUILDER_EXIT=$?
+        fi
+    fi
     set -e
 
     # Builder failure counts as attempt
-    if [[ $CLAUDE_EXIT -ne 0 ]]; then
+    if [[ $BUILDER_EXIT -ne 0 ]]; then
         LAST_GATE="BUILDER"
-        LAST_SUMMARY="Builder (Claude Code) failed with exit code $CLAUDE_EXIT. See builder.log."
+        LAST_SUMMARY="Builder ($BUILDER_PROVIDER) failed with exit code $BUILDER_EXIT. See builder.log."
         echo "$LAST_SUMMARY" > "$ATTEMPT_DIR/summary.txt"
         write_attempt_decision "$ATTEMPT_DIR" "REJECT" "$LAST_GATE" "$LAST_SUMMARY"
+        write_retry_evidence "$ATTEMPT_DIR" "$LAST_GATE" "$LAST_SUMMARY"
 
         # Continue to next attempt or escalate
         if [[ $ATTEMPT -lt $MAX_ATTEMPTS ]]; then
@@ -788,6 +1059,7 @@ RETRY_FOOTER
         LAST_SUMMARY="Patch modifies files outside allowed scope."
         echo "$LAST_SUMMARY" > "$ATTEMPT_DIR/summary.txt"
         write_attempt_decision "$ATTEMPT_DIR" "REJECT" "$LAST_GATE" "$LAST_SUMMARY"
+        write_retry_evidence "$ATTEMPT_DIR" "$LAST_GATE" "$LAST_SUMMARY"
 
         if [[ $ATTEMPT -lt $MAX_ATTEMPTS ]]; then
             echo ""
@@ -831,6 +1103,7 @@ RETRY_FOOTER
         LAST_SUMMARY="Executor failed with exit code $EVAL_EXIT. See eval.log."
         echo "$LAST_SUMMARY" > "$ATTEMPT_DIR/summary.txt"
         write_attempt_decision "$ATTEMPT_DIR" "REJECT" "$LAST_GATE" "$LAST_SUMMARY"
+        write_retry_evidence "$ATTEMPT_DIR" "$LAST_GATE" "$LAST_SUMMARY"
 
         if [[ $ATTEMPT -lt $MAX_ATTEMPTS ]]; then
             echo ""
@@ -851,7 +1124,7 @@ RETRY_FOOTER
 
     # Build critic prompt with pre-written checklist
     cat > "$ATTEMPT_DIR/critic_prompt.md" << 'CRITIC_HEADER'
-You are the Critic-Review in an GateKeeper workflow.
+You are the Critic-Review in a GateKeeper workflow.
 You did NOT write this patch.
 
 Default posture: REJECT unless the patch proves itself with evidence.
@@ -902,6 +1175,12 @@ For EACH checklist item above:
 
 Do NOT write a new checklist. Use the pre-written checklist above.
 
+If you REJECT, include a "Retry Evidence" section with:
+- failed checklist item summary
+- missing proof
+- relevant patch/log location when available
+- expected evidence shape
+
 ## Output Format (EXACT - use this format)
 
 First, write your analysis showing evidence for each checklist item.
@@ -923,7 +1202,7 @@ CRITIC_FOOTER
     echo "Running Codex (read-only sandbox)..."
     set +e
     cd "$WORKTREE_PATH"
-    codex exec --sandbox read-only --skip-git-repo-check "$(cat "$ATTEMPT_DIR/critic_prompt.md")" 2>&1 | tee "$ATTEMPT_DIR/critic.md"
+codex exec --sandbox read-only --skip-git-repo-check - < "$ATTEMPT_DIR/critic_prompt.md" 2>&1 | tee "$ATTEMPT_DIR/critic.md"
     CODEX_EXIT=$?
     set -e
 
@@ -955,6 +1234,9 @@ CRITIC_FOOTER
     LAST_SUMMARY="${VERDICT_SUMMARY#SUMMARY: }"
     echo "$LAST_SUMMARY" > "$ATTEMPT_DIR/summary.txt"
     write_attempt_decision "$ATTEMPT_DIR" "$VERDICT" "$LAST_GATE" "$LAST_SUMMARY"
+    if [[ "$VERDICT" == "REJECT" ]]; then
+        write_retry_evidence "$ATTEMPT_DIR" "$LAST_GATE" "$LAST_SUMMARY"
+    fi
 
     if [[ "$VERDICT" == "APPROVE" ]]; then
         FINAL_VERDICT="APPROVE"
@@ -982,6 +1264,7 @@ echo ">>> Final Decision Package"
 echo "=========================================="
 
 write_final_decision "$RUN_DIR" "$FINAL_VERDICT" "$ATTEMPT" "$WORKTREE_PATH" "$WORKTREE_BRANCH"
+generate_report "$RUN_DIR" "$REPORT_FORMAT"
 
 echo ""
 echo "=== $FINAL_VERDICT ==="
