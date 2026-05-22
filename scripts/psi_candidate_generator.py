@@ -94,6 +94,17 @@ def read_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _retry_file_payload(ledger: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
+    retry_file = str(row.get("retry_file") or "").strip()
+    if not retry_file:
+        return {}
+    ledger_dir_raw = str(ledger.get("_ledger_dir") or "").strip()
+    retry_path = Path(retry_file)
+    if not retry_path.is_absolute() and ledger_dir_raw:
+        retry_path = Path(ledger_dir_raw) / retry_path
+    return read_json(retry_path)
+
+
 def _ledger_blocked_ids(ledger: dict[str, Any]) -> set[str]:
     blocked: set[str] = set()
     for section in ("non_retry_candidates", "not_run_candidates"):
@@ -107,6 +118,17 @@ def _ledger_blocked_ids(ledger: dict[str, Any]) -> set[str]:
             if example_id:
                 blocked.add(example_id)
     return blocked
+
+
+def _ledger_retry_only_identifiers(ledger: dict[str, Any]) -> set[str]:
+    retry_only: set[str] = set()
+    for row in ledger.get("quiet_window_retry_queue", []) or []:
+        for payload in (row, _retry_file_payload(ledger, row)):
+            for key in ("candidate_id", "target", "source_candidate_id"):
+                value = str(payload.get(key) or "").strip()
+                if value:
+                    retry_only.add(value)
+    return retry_only
 
 
 def _ledger_blocked_classes(ledger: dict[str, Any]) -> set[str]:
@@ -137,8 +159,11 @@ def _is_projection_prune_manual_remap(candidate: Candidate | dict[str, Any]) -> 
 def _candidate_allowed_by_ledger(candidate: Candidate, ledger: dict[str, Any]) -> bool:
     if not ledger:
         return True
+    if (candidate.source_evidence or {}).get("kind") == "quiet_retry":
+        return True
 
     blocked_ids = _ledger_blocked_ids(ledger)
+    retry_only_ids = _ledger_retry_only_identifiers(ledger)
     identifiers = {
         candidate.candidate_id,
         candidate.target,
@@ -150,6 +175,8 @@ def _candidate_allowed_by_ledger(candidate: Candidate, ledger: dict[str, Any]) -
         if value:
             identifiers.add(value)
     if any(identifier in blocked_ids for identifier in identifiers if identifier):
+        return False
+    if any(identifier in retry_only_ids for identifier in identifiers if identifier):
         return False
 
     blocked_classes = _ledger_blocked_classes(ledger)
@@ -592,7 +619,12 @@ def generate_candidates(
             "insight": insight,
             "combination": combination,
         },
-        read_json(candidate_ledger_path) if candidate_ledger_path else {},
+        {
+            **read_json(candidate_ledger_path),
+            "_ledger_dir": str(Path(candidate_ledger_path).resolve().parent),
+        }
+        if candidate_ledger_path
+        else {},
     )
     return {
         "evidence": [c.to_dict() for c in lanes["evidence"]],

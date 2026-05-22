@@ -1596,6 +1596,8 @@ def main() -> int:
         raise SystemExit("--max-iterations must be >= 1")
     if args.max_hours <= 0:
         raise SystemExit("--max-hours must be > 0")
+    if args.candidate_ledger:
+        args.candidate_ledger = str(Path(args.candidate_ledger).resolve())
 
     run_dir = args.run_dir.resolve()
     ensure_run_dir(run_dir)
