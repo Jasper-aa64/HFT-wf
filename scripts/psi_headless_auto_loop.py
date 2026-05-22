@@ -671,6 +671,7 @@ def _run_external_patch_command(
     source_root: Path,
     candidate: dict[str, Any],
     iteration: int,
+    candidate_ledger: str = "",
 ) -> tuple[int, str]:
     env = os.environ.copy()
     env.update(
@@ -684,7 +685,7 @@ def _run_external_patch_command(
             "PSI_SOURCE_ROOT": str(source_root),
             "PSI_RUN_DIR": str(run_dir),
             "PSI_ITERATION": str(iteration),
-            "PSI_CANDIDATE_LEDGER": str(args.candidate_ledger) if getattr(args, "candidate_ledger", "") else "",
+            "PSI_CANDIDATE_LEDGER": candidate_ledger,
         }
     )
     completed = subprocess.run(
@@ -755,7 +756,15 @@ def materialize_candidate_patch(
     if command.startswith("builtin:") or command in {"noop", "fake-nonempty"}:
         rc, output = _run_builtin_patch_command(command, workspace, candidate)
     else:
-        rc, output = _run_external_patch_command(command, run_dir, workspace, source_root, candidate, iteration)
+        rc, output = _run_external_patch_command(
+            command,
+            run_dir,
+            workspace,
+            source_root,
+            candidate,
+            iteration,
+            str(args.candidate_ledger) if getattr(args, "candidate_ledger", "") else "",
+        )
     metadata["patch_command_rc"] = rc
     log_path = run_dir / "logs" / f"iter_{iteration:03d}_{candidate['candidate_id']}_patch_command.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
