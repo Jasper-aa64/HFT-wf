@@ -302,6 +302,30 @@ class TwapHarnessReplayTests(unittest.TestCase):
             self.assertEqual(candidate_rows[0]["verdict"], "infra_blocked")
             self.assertEqual(candidate_rows[0]["timing_verdict"], "infra_blocked")
 
+    def test_twap_guard_rejects_rebuilding_cached_push_per_session(self) -> None:
+        patch_text = """
+diff --git a/PsiGrpcServer/twap_sale_service.cpp b/PsiGrpcServer/twap_sale_service.cpp
+--- a/PsiGrpcServer/twap_sale_service.cpp
++++ b/PsiGrpcServer/twap_sale_service.cpp
+@@ -1,12 +1,5 @@
+-        TwapSalePushMessage stock_change_message;
+-        bool has_stock_change_message = false;
+-        if (!stock_code.empty()) {
+-            stock_change_message = buildTwapSaleAggregationPushMessage(userId, stock_code, cmd);
+-            has_stock_change_message = stock_change_message.success();
+-        }
+         for (const auto &target: target_sessions) {
+             TwapSalePushMessage message = stock_code.empty()
+                                           ? buildTwapSaleAggregationMessage(request)
+-                                          : stock_change_message;
++                                          : buildTwapSaleAggregationPushMessage(userId, stock_code, cmd);
+         }
+"""
+
+        violations = loop._validate_patch_semantic_guards(patch_text)
+
+        self.assertTrue(any("fanout regression" in item for item in violations))
+
 
 if __name__ == "__main__":
     unittest.main()

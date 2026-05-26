@@ -508,29 +508,98 @@ def inject_service_cpp(path: Path) -> None:
         "            if (!twap_profile_filter_match) {\n",
         "filter",
     )
-    text = replace_once(
-        text,
-        "            TwapSalePushMessage message = stock_code.empty()\n"
-        "                                          ? buildTwapSaleAggregationMessage(request)\n"
-        "                                          : buildTwapSaleAggregationPushMessage(userId, stock_code, cmd);\n",
-        "            const auto twap_profile_build_start = twapProfileNowUs();\n"
+    old_session_build = (
         "            TwapSalePushMessage message = stock_code.empty()\n"
         "                                          ? buildTwapSaleAggregationMessage(request)\n"
         "                                          : buildTwapSaleAggregationPushMessage(userId, stock_code, cmd);\n"
-        "            twap_profile_session_build_us += twapProfileNowUs() - twap_profile_build_start;\n",
-        "session build",
     )
-    text = replace_once(
-        text,
+    cached_stock_build = (
+        "        TwapSalePushMessage stock_change_message;\n"
+        "        bool has_stock_change_message = false;\n"
+        "        if (!stock_code.empty()) {\n"
+        "            stock_change_message = buildTwapSaleAggregationPushMessage(userId, stock_code, cmd);\n"
+        "            has_stock_change_message = stock_change_message.success();\n"
+        "        }\n"
+    )
+    if old_session_build in text:
+        text = replace_once(
+            text,
+            old_session_build,
+            "            const auto twap_profile_build_start = twapProfileNowUs();\n"
+            "            TwapSalePushMessage message = stock_code.empty()\n"
+            "                                          ? buildTwapSaleAggregationMessage(request)\n"
+            "                                          : buildTwapSaleAggregationPushMessage(userId, stock_code, cmd);\n"
+            "            twap_profile_session_build_us += twapProfileNowUs() - twap_profile_build_start;\n",
+            "session build",
+        )
+    elif cached_stock_build in text:
+        text = replace_once(
+            text,
+            cached_stock_build,
+            "        long long twap_profile_session_filter_us = 0;\n"
+            "        long long twap_profile_session_build_us = 0;\n"
+            "        long long twap_profile_queue_push_us = 0;\n"
+            "        size_t twap_profile_pushed = 0;\n"
+            "        TwapSalePushMessage stock_change_message;\n"
+            "        bool has_stock_change_message = false;\n"
+            "        if (!stock_code.empty()) {\n"
+            "            const auto twap_profile_build_start = twapProfileNowUs();\n"
+            "            stock_change_message = buildTwapSaleAggregationPushMessage(userId, stock_code, cmd);\n"
+            "            has_stock_change_message = stock_change_message.success();\n"
+            "            twap_profile_session_build_us += twapProfileNowUs() - twap_profile_build_start;\n"
+            "        }\n",
+            "cached stock build",
+        )
+        text = replace_once(
+            text,
+            "            TwapSalePushMessage message = stock_code.empty()\n"
+            "                                          ? buildTwapSaleAggregationMessage(request)\n"
+            "                                          : stock_change_message;\n",
+            "            const auto twap_profile_build_start = twapProfileNowUs();\n"
+            "            TwapSalePushMessage message = stock_code.empty()\n"
+            "                                          ? buildTwapSaleAggregationMessage(request)\n"
+            "                                          : stock_change_message;\n"
+            "            if (stock_code.empty()) {\n"
+            "                twap_profile_session_build_us += twapProfileNowUs() - twap_profile_build_start;\n"
+            "            }\n",
+            "cached empty stock build",
+        )
+        text = replace_once(
+            text,
+            "        twapProfileLog(\"twap.push.session_scan\", twapProfileNowUs() - twap_profile_session_scan_start, target_sessions.size());\n\n"
+            "        long long twap_profile_session_filter_us = 0;\n"
+            "        long long twap_profile_session_build_us = 0;\n"
+            "        long long twap_profile_queue_push_us = 0;\n"
+            "        size_t twap_profile_pushed = 0;\n",
+            "        twapProfileLog(\"twap.push.session_scan\", twapProfileNowUs() - twap_profile_session_scan_start, target_sessions.size());\n\n",
+            "cached duplicate accumulator cleanup",
+        )
+    else:
+        raise RuntimeError("instrumentation anchor not found: session build")
+
+    old_queue_push = (
         "            std::lock_guard<std::mutex> lock(session->queue_mutex);\n"
         "            if (session->active) {\n"
         "                session->twap_sale_message_queue[client_id].push(message);\n"
         "            }\n"
-        "        }\n",
+        "        }\n"
+    )
+    enqueue_queue_push = (
+        "            std::lock_guard<std::mutex> lock(session->queue_mutex);\n"
+        "            if (session->active) {\n"
+        "                session->twap_sale_message_queue[client_id].enqueue(message);\n"
+        "            }\n"
+        "        }\n"
+    )
+    queue_anchor = old_queue_push if old_queue_push in text else enqueue_queue_push
+    queue_method = "push" if queue_anchor == old_queue_push else "enqueue"
+    text = replace_once(
+        text,
+        queue_anchor,
         "            const auto twap_profile_queue_start = twapProfileNowUs();\n"
         "            std::lock_guard<std::mutex> lock(session->queue_mutex);\n"
         "            if (session->active) {\n"
-        "                session->twap_sale_message_queue[client_id].push(message);\n"
+        f"                session->twap_sale_message_queue[client_id].{queue_method}(message);\n"
         "                ++twap_profile_pushed;\n"
         "            }\n"
         "            twap_profile_queue_push_us += twapProfileNowUs() - twap_profile_queue_start;\n"
@@ -742,7 +811,7 @@ def run_remote_profile(args: argparse.Namespace, remote_workspace: str, remote_r
         "MEASURE_CASES": args.measure_cases,
         "BUILD_TARGETS": args.build_targets,
         "CANDIDATE_ID": "twap_runtime_stage_profile",
-        "TWAP_CORRECTNESS_MODE": "push_only",
+        "TWAP_CORRECTNESS_MODE": args.correctness_mode,
     }
     env_prefix = " ".join(f"{key}={remote_quote(value)}" for key, value in env.items() if value)
     command = (
@@ -807,6 +876,7 @@ def main() -> int:
     parser.add_argument("--user-id", default="dc548fe6083e4523a918aaef1a68b857")
     parser.add_argument("--measure-cases", default="100:50:120 500:20:180 1000:20:240 500:5:240")
     parser.add_argument("--build-targets", default="PsiGrpcServer PsiTraderRunner twap_current_task_runtime_test twap_position_push_perf_test")
+    parser.add_argument("--correctness-mode", default="push_only", choices=("push_only", "skip"))
     parser.add_argument("--remote-timeout-seconds", type=int, default=7200)
     parser.add_argument("--parse-only-log", type=Path, default=None)
     parser.add_argument(

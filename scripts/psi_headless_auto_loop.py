@@ -617,8 +617,15 @@ def _validate_patch_semantic_guards(patch_text: str) -> list[str]:
         for line in patch_text.splitlines()
         if line.startswith("+") and not line.startswith("+++")
     ]
+    removed_lines = [
+        line[1:].strip()
+        for line in patch_text.splitlines()
+        if line.startswith("-") and not line.startswith("---")
+    ]
     added_text = "\n".join(added_lines)
+    removed_text = "\n".join(removed_lines)
     lower_added = added_text.lower()
+    lower_removed = removed_text.lower()
     violations: list[str] = []
 
     reuses_push_message = (
@@ -638,6 +645,20 @@ def _validate_patch_semantic_guards(patch_text: str) -> list[str]:
 
     if "static TwapSalePushMessage" in added_text:
         violations.append("unsafe static TwapSalePushMessage cache in push path")
+
+    removes_stock_change_cache = (
+        "twapsalepushmessage stock_change_message" in lower_removed
+        and "has_stock_change_message" in lower_removed
+        and "buildtwapsaleaggregationpushmessage(userid, stock_code, cmd)" in lower_removed
+    )
+    rebuilds_push_message_per_session = (
+        "buildtwapsaleaggregationpushmessage(userid, stock_code, cmd)" in lower_added
+        and "stock_change_message" not in lower_added
+    )
+    if removes_stock_change_cache and rebuilds_push_message_per_session:
+        violations.append(
+            "unsafe TWAP fanout regression: keeps one-session timing by rebuilding stock push message inside the session loop"
+        )
 
     return violations
 
@@ -1103,6 +1124,10 @@ def call_ssh_remote_batch(
         remote_env["USER_ID"] = str(args.twap_user_id)
     if args.twap_measure_cases:
         remote_env["MEASURE_CASES"] = str(args.twap_measure_cases)
+    if args.twap_build_targets:
+        remote_env["BUILD_TARGETS"] = str(args.twap_build_targets)
+    if args.twap_correctness_mode:
+        remote_env["TWAP_CORRECTNESS_MODE"] = str(args.twap_correctness_mode)
 
     env_prefix = " ".join(f"{key}={_remote_quote(value)}" for key, value in remote_env.items())
     remote_batch_script = args.remote_batch_script or str(args.batch_script)
@@ -2027,6 +2052,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--twap-endpoint", default="", help="TWAP gRPC endpoint passed to twap_headless_remote.sh.")
     parser.add_argument("--twap-user-id", default="", help="TWAP userId passed to twap_headless_remote.sh.")
     parser.add_argument("--twap-measure-cases", default="", help="TWAP timing cases, e.g. '100:50:120 500:20:180'.")
+    parser.add_argument("--twap-build-targets", default="", help="TWAP build targets passed to twap_headless_remote.sh.")
+    parser.add_argument("--twap-correctness-mode", default="", choices=("", "push_only", "skip"), help="TWAP correctness mode passed to twap_headless_remote.sh.")
     return parser
 
 
