@@ -193,6 +193,29 @@ class TwapHarnessReplayTests(unittest.TestCase):
             self.assertFalse(any(row["timing_verdict"] == "pass" for row in candidate_rows))
             self.assertFalse(any(row["verdict"] == "pass" for row in candidate_rows))
 
+    def test_remote_rejected_completed_still_reports_twap_loss_reason(self) -> None:
+        batch_state = {
+            "compare_status": "pass",
+            "decision": "rejected",
+            "reason": "completed",
+            "lost_failure_count": 2,
+            "twap_case_deltas": [
+                {
+                    "case": "500_i5",
+                    "control_p95_ms": "250.0",
+                    "candidate_p95_ms": "312.0",
+                    "p95_delta_ms": 62.0,
+                    "control_lost": "99",
+                    "candidate_lost": "102",
+                }
+            ],
+        }
+
+        verdict, reason = loop.judge_verdict(batch_state)
+
+        self.assertEqual(verdict, "rejected")
+        self.assertEqual(reason, "TWAP push timing lost messages: lost_failure_count=2")
+
 
 if __name__ == "__main__":
     unittest.main()

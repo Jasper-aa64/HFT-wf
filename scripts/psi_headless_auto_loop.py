@@ -1651,10 +1651,6 @@ def judge_verdict(batch_state: dict[str, Any]) -> tuple[str, str]:
     if compare not in {"pass", "ok"}:
         return "rejected", "compare gate failed; fix patch before retry"
 
-    decision = (batch_state.get("decision") or "").lower()
-    if decision == "rejected":
-        return "rejected", batch_state.get("reason", "") or "remote TWAP gate rejected candidate"
-
     twap_stats = _twap_batch_stats(batch_state)
     if twap_stats.get("case_count"):
         lost_failure_count = int(batch_state.get("lost_failure_count") or 0)
@@ -1666,6 +1662,10 @@ def judge_verdict(batch_state: dict[str, Any]) -> tuple[str, str]:
             return "rejected", f"TWAP stress p95 regression {max_stress:.3f}ms exceeds 5.000ms"
         if max_normal > 1.0:
             return "rejected", f"TWAP normal-frequency p95 regression {max_normal:.3f}ms exceeds 1.000ms"
+
+    decision = (batch_state.get("decision") or "").lower()
+    if decision == "rejected":
+        return "rejected", batch_state.get("reason", "") or "remote TWAP gate rejected candidate"
 
     noise_flag = (batch_state.get("noise_flag") or "").upper()
     timing = (batch_state.get("timing_verdict") or batch_state.get("timing_status") or "").upper()
