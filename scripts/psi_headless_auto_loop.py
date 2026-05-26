@@ -116,6 +116,7 @@ def _merge_comparison_summary(batch_state: dict[str, Any], summary: dict[str, An
         "compare_result",
         "decision",
         "accepted",
+        "lost_failure_count",
         "paired_evidence_status",
         "paired_evidence_reason",
         "timing_verdict",
@@ -1279,6 +1280,8 @@ def _twap_batch_stats(batch_state: dict[str, Any]) -> dict[str, Any]:
             "case_delta_summary": "",
             "control_lost_total": 0,
             "candidate_lost_total": 0,
+            "control_unknown_push_total": 0,
+            "candidate_unknown_push_total": 0,
             "max_normal_regression_ms": None,
             "max_stress_regression_ms": None,
             "max_normal_regression_ms_text": "",
@@ -1292,6 +1295,8 @@ def _twap_batch_stats(batch_state: dict[str, Any]) -> dict[str, Any]:
     stress_regressions: list[float] = []
     control_lost_total = 0
     candidate_lost_total = 0
+    control_unknown_push_total = 0
+    candidate_unknown_push_total = 0
     rendered: list[str] = []
     for row in case_deltas:
         if not isinstance(row, dict):
@@ -1302,10 +1307,16 @@ def _twap_batch_stats(batch_state: dict[str, Any]) -> dict[str, Any]:
         raw_delta = _float_or_none(row.get("p95_delta_ms"))
         control_lost = _float_or_none(row.get("control_lost"))
         candidate_lost = _float_or_none(row.get("candidate_lost"))
+        control_unknown_pushes = _float_or_none(row.get("control_unknown_pushes"))
+        candidate_unknown_pushes = _float_or_none(row.get("candidate_unknown_pushes"))
         if control_lost is not None:
             control_lost_total += int(control_lost)
         if candidate_lost is not None:
             candidate_lost_total += int(candidate_lost)
+        if control_unknown_pushes is not None:
+            control_unknown_push_total += int(control_unknown_pushes)
+        if candidate_unknown_pushes is not None:
+            candidate_unknown_push_total += int(candidate_unknown_pushes)
         if ctrl is not None:
             control_p95.append(ctrl)
         if cand is not None:
@@ -1331,6 +1342,8 @@ def _twap_batch_stats(batch_state: dict[str, Any]) -> dict[str, Any]:
         "case_delta_summary": ";".join(rendered),
         "control_lost_total": control_lost_total,
         "candidate_lost_total": candidate_lost_total,
+        "control_unknown_push_total": control_unknown_push_total,
+        "candidate_unknown_push_total": candidate_unknown_push_total,
         "max_normal_regression_ms": max_normal,
         "max_stress_regression_ms": max_stress,
         "max_normal_regression_ms_text": f"{max_normal:.3f}",
@@ -1358,7 +1371,7 @@ def record_attempt(
             if not isinstance(delta, dict):
                 continue
             rendered.append(
-                f"{delta.get('case', '')}:p95_delta_ms={delta.get('p95_delta_ms', '')},lost={delta.get('candidate_lost', '')}"
+                f"{delta.get('case', '')}:p95_delta_ms={delta.get('p95_delta_ms', '')},lost={delta.get('candidate_lost', '')},unknown={delta.get('candidate_unknown_pushes', '')}"
             )
         if rendered:
             timing_notes = (timing_notes + "; " if timing_notes else "") + "twap_case_deltas[" + "; ".join(rendered) + "]"
@@ -1582,7 +1595,9 @@ def upsert_timing_from_batch(
                     "verdict": verdict if role == "candidate" else "",
                     "notes": (
                         f"case={case}; sent={sample.get('sent', '')}; received={sample.get('received', '')}; "
-                        f"lost={sample.get('lost', '')}; p95_ms={sample.get('p95_ms', '')}; "
+                        f"lost={sample.get('lost', '')}; unknown_pushes={sample.get('unknown_pushes', '')}; "
+                        f"subscribers={sample.get('subscribers', '')}; p95_ms={sample.get('p95_ms', '')}; "
+                        f"worst_subscriber_p95_ms={sample.get('worst_subscriber_p95_ms', '')}; "
                         f"p99_ms={sample.get('p99_ms', '')}; max_ms={sample.get('max_ms', '')}; "
                         f"p95_delta_candidate_minus_control={delta_row.get('p95_delta_ms', '')}"
                     ),
@@ -1695,8 +1710,12 @@ def judge_verdict(batch_state: dict[str, Any]) -> tuple[str, str]:
     twap_stats = _twap_batch_stats(batch_state)
     if twap_stats.get("case_count"):
         control_lost_total = int(twap_stats.get("control_lost_total") or 0)
-        if control_lost_total > 0:
-            return "infra_blocked", f"TWAP control baseline lost pushes: control_lost_total={control_lost_total}"
+        control_unknown_push_total = int(twap_stats.get("control_unknown_push_total") or 0)
+        if control_lost_total > 0 or control_unknown_push_total > 0:
+            return "infra_blocked", f"TWAP control baseline unhealthy: control_lost_total={control_lost_total}, control_unknown_push_total={control_unknown_push_total}"
+        candidate_unknown_push_total = int(twap_stats.get("candidate_unknown_push_total") or 0)
+        if candidate_unknown_push_total > 0:
+            return "rejected", f"TWAP candidate produced unknown pushes: candidate_unknown_push_total={candidate_unknown_push_total}"
         lost_failure_count = int(batch_state.get("lost_failure_count") or 0)
         if lost_failure_count > 0:
             return "rejected", f"TWAP push timing lost messages: lost_failure_count={lost_failure_count}"

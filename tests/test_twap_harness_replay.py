@@ -257,6 +257,93 @@ class TwapHarnessReplayTests(unittest.TestCase):
         self.assertEqual(verdict, "rejected")
         self.assertEqual(reason, "TWAP normal-frequency p95 regression 4.400ms exceeds 1.000ms")
 
+    def test_multi_subscriber_unknown_pushes_reject_and_preserve_new_fields(self) -> None:
+        summary = {
+            "candidate_id": "twap_unknown_push_candidate",
+            "build_status": "pass",
+            "correctness_status": "pass",
+            "timing_status": "pass",
+            "decision": "rejected",
+            "reason": "completed",
+            "accepted": False,
+            "lost_failure_count": 1,
+            "case_deltas": [
+                {
+                    "case": "500_i20_s4",
+                    "control_p95_ms": "8.0",
+                    "candidate_p95_ms": "8.2",
+                    "p95_delta_ms": 0.2,
+                    "control_lost": "0",
+                    "candidate_lost": "0",
+                    "control_unknown_pushes": "0",
+                    "candidate_unknown_pushes": "1",
+                    "control_worst_subscriber_p95_ms": "8.5",
+                    "candidate_worst_subscriber_p95_ms": "9.1",
+                }
+            ],
+            "timing_samples": [
+                {
+                    "case": "500_i20_s4",
+                    "role": "candidate",
+                    "count": "500",
+                    "publishes": "500",
+                    "subscribers": "4",
+                    "sent": "2000",
+                    "received": "2000",
+                    "lost": "0",
+                    "unknown_pushes": "1",
+                    "p50_ms": "7.0",
+                    "p95_ms": "8.2",
+                    "worst_subscriber_p95_ms": "9.1",
+                    "status": "WARN_UNKNOWN_PUSH",
+                }
+            ],
+        }
+
+        with tempfile.TemporaryDirectory(prefix="twap_unknown_push_test_") as raw_dir:
+            run_dir = Path(raw_dir)
+            loop.ensure_run_dir(run_dir)
+            candidate = {
+                "candidate_id": "twap_unknown_push_candidate",
+                "lane": "evidence",
+                "target": "twap.push.test",
+                "touched_files": ["PsiGrpcServer/twap_sale_service.cpp"],
+                "semantic_risk": "low",
+                "hypothesis": "fixture candidate",
+            }
+            batch_state = {"compare_status": "pass"}
+            loop._merge_comparison_summary(batch_state, summary)
+
+            verdict, reason = loop.judge_verdict(batch_state)
+            loop.record_attempt(
+                run_dir,
+                iteration=1,
+                candidate=candidate,
+                batch_state=batch_state,
+                verdict=verdict,
+                retry_condition=reason,
+                stop_reason="",
+                notes="fixture replay",
+            )
+            loop.upsert_timing_from_batch(
+                run_dir,
+                candidate,
+                batch_state,
+                "17062",
+                verdict=verdict,
+                verdict_reason=reason,
+            )
+
+            self.assertEqual(verdict, "rejected")
+            self.assertEqual(reason, "TWAP candidate produced unknown pushes: candidate_unknown_push_total=1")
+            attempts = read_tsv(run_dir / "attempts.tsv")
+            self.assertIn("unknown=1", attempts[0]["notes"])
+            history = read_tsv(run_dir / "timing_history.tsv")
+            self.assertEqual(history[0]["sample_count"], "2000")
+            self.assertIn("subscribers=4", history[0]["notes"])
+            self.assertIn("unknown_pushes=1", history[0]["notes"])
+            self.assertIn("worst_subscriber_p95_ms=9.1", history[0]["notes"])
+
     def test_control_lost_pushes_blocks_as_infra_not_candidate_verdict(self) -> None:
         batch_state = {
             "compare_status": "pass",
@@ -328,7 +415,7 @@ class TwapHarnessReplayTests(unittest.TestCase):
             )
 
             self.assertEqual(verdict, "infra_blocked")
-            self.assertEqual(reason, "TWAP control baseline lost pushes: control_lost_total=161")
+            self.assertEqual(reason, "TWAP control baseline unhealthy: control_lost_total=161, control_unknown_push_total=0")
             self.assertEqual(read_tsv(run_dir / "neutral_pool.tsv"), [])
 
             attempts = read_tsv(run_dir / "attempts.tsv")

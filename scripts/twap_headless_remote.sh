@@ -28,7 +28,7 @@ ACTIVE_RUNNER_ROOT=""
 
 mkdir -p "$RUN_DIR" "$RUN_DIR/logs"
 : > "$RUN_DIR/timing_samples.tsv"
-printf "case\trole\tcount\tinterval_ms\ttimeout_seconds\tsent\treceived\tlost\tunknown_pushes\tavg_ms\tp50_ms\tp95_ms\tp99_ms\tmax_ms\tstatus\tlog_file\n" \
+printf "case\trole\tcount\tinterval_ms\ttimeout_seconds\tpublishes\tsubscribers\tsent\treceived\tlost\tunknown_pushes\tavg_ms\tp50_ms\tp95_ms\tp99_ms\tmax_ms\tworst_subscriber_p95_ms\tworst_subscriber_max_ms\tstatus\tlog_file\n" \
   > "$RUN_DIR/timing_samples.tsv"
 
 log() {
@@ -249,6 +249,8 @@ fields = [
     os.environ["COUNT"],
     os.environ["INTERVAL"],
     os.environ["TIMEOUT"],
+    data.get("publishes", ""),
+    data.get("subscribers", ""),
     data.get("sent", ""),
     data.get("received", ""),
     data.get("lost", ""),
@@ -258,6 +260,8 @@ fields = [
     data.get("latencyMs.p95", ""),
     data.get("latencyMs.p99", ""),
     data.get("latencyMs.max", ""),
+    data.get("worstSubscriberP95Ms", ""),
+    data.get("worstSubscriberMaxMs", ""),
     data.get("status", ""),
     os.environ["LOG_FILE"],
 ]
@@ -407,11 +411,17 @@ for case, cand in candidate.items():
         "p95_delta_ms": "" if ctrl_p95 != ctrl_p95 or cand_p95 != cand_p95 else round(cand_p95 - ctrl_p95, 6),
         "control_lost": ctrl.get("lost", ""),
         "candidate_lost": cand.get("lost", ""),
+        "control_unknown_pushes": ctrl.get("unknown_pushes", ""),
+        "candidate_unknown_pushes": cand.get("unknown_pushes", ""),
+        "control_worst_subscriber_p95_ms": ctrl.get("worst_subscriber_p95_ms", ""),
+        "candidate_worst_subscriber_p95_ms": cand.get("worst_subscriber_p95_ms", ""),
     })
 
 lost_failures = [
     row for row in rows
-    if (row.get("lost") or "") not in {"", "0"} or (row.get("status") or "") not in {"", "PASS"}
+    if (row.get("lost") or "") not in {"", "0"}
+    or (row.get("unknown_pushes") or "") not in {"", "0"}
+    or (row.get("status") or "") not in {"", "PASS"}
 ]
 def case_base(case):
     return str(case).split("_s", 1)[0]
