@@ -1343,7 +1343,7 @@ def record_attempt(
         "build_status": batch_state.get("build_status", ""),
         "compare_status": batch_state.get("compare_status", ""),
         "paired_sample_count": str(batch_state.get("paired_sample_count", "") or twap_stats.get("case_count", "")),
-        "timing_verdict": batch_state.get("timing_verdict", batch_state.get("timing_status", "")),
+        "timing_verdict": verdict,
         "sample_count": len(candidate_samples),
         "samples_ms": ",".join(
             f"{v:.3f}" for v in candidate_samples
@@ -1450,6 +1450,9 @@ def upsert_timing_from_batch(
     candidate: dict[str, Any],
     batch_state: dict[str, Any],
     host_key: str,
+    *,
+    verdict: str = "",
+    verdict_reason: str = "",
 ) -> None:
     """Write control + candidate rows into timing_history.tsv for this iteration."""
 
@@ -1512,8 +1515,8 @@ def upsert_timing_from_batch(
                     "range_seconds": "",
                     "delta_ms": f"{benefit_ms:.3f}" if role == "candidate" and benefit_ms is not None else "",
                     "delta_seconds": f"{benefit_ms / 1000.0:.6f}" if role == "candidate" and benefit_ms is not None else "",
-                    "timing_verdict": batch_state.get("timing_status", "") if role == "candidate" else "",
-                    "timing_verdict_reason": batch_state.get("reason", ""),
+                    "timing_verdict": verdict if role == "candidate" else "",
+                    "timing_verdict_reason": verdict_reason if role == "candidate" else "",
                     "timing_verdict_method": "twap_headless_remote",
                     "control_sample_count": received if role == "control" else "",
                     "candidate_sample_count": received if role == "candidate" else "",
@@ -1535,7 +1538,7 @@ def upsert_timing_from_batch(
                     "paired_range_ms": "",
                     "paired_mean_ms": "",
                     "noise_flag": batch_state.get("noise_flag", "ok"),
-                    "verdict": batch_state.get("timing_status", "") if role == "candidate" else "",
+                    "verdict": verdict if role == "candidate" else "",
                     "notes": (
                         f"case={case}; sent={sample.get('sent', '')}; received={sample.get('received', '')}; "
                         f"lost={sample.get('lost', '')}; p95_ms={sample.get('p95_ms', '')}; "
@@ -1605,8 +1608,8 @@ def upsert_timing_from_batch(
                 "range_seconds": "",
                 "delta_ms": f"{batch_state.get('delta_ms', 0):.3f}" if kind == "candidate" else "",
                 "delta_seconds": "",
-                "timing_verdict": batch_state.get("timing_status", "") if kind == "candidate" else "",
-                "timing_verdict_reason": "",
+                "timing_verdict": verdict if kind == "candidate" else "",
+                "timing_verdict_reason": verdict_reason if kind == "candidate" else "",
                 "timing_verdict_method": "auto_loop_dry_run" if batch_state.get("dry_run") else "psi_headless_remote",
                 "control_sample_count": str(len(control_samples)),
                 "candidate_sample_count": str(len(candidate_samples)),
@@ -1630,7 +1633,7 @@ def upsert_timing_from_batch(
                 "paired_range_ms": f"{batch_state.get('paired_range_ms', '')}",
                 "paired_mean_ms": f"{batch_state.get('paired_mean_ms', '')}",
                 "noise_flag": batch_state.get("noise_flag", "ok"),
-                "verdict": batch_state.get("timing_status", "") if kind == "candidate" else "",
+                "verdict": verdict if kind == "candidate" else "",
                 "notes": f"iteration={batch_state.get('iteration', '')}; dry_run={batch_state.get('dry_run', False)}",
             }
         )
@@ -1946,7 +1949,14 @@ def iteration_step(
         stop_reason="",
         notes=candidate.get("expected_effect", ""),
     )
-    upsert_timing_from_batch(run_dir, candidate, batch_state, host_key)
+    upsert_timing_from_batch(
+        run_dir,
+        candidate,
+        batch_state,
+        host_key,
+        verdict=verdict,
+        verdict_reason=retry_condition,
+    )
 
     return candidate, verdict, "", lanes, batch_state
 
