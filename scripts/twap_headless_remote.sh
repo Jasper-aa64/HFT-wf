@@ -267,6 +267,10 @@ PY
 run_correctness() {
   local root="$1"
   local token="$2"
+  if [ "$TWAP_CORRECTNESS_MODE" = "skip" ]; then
+    log "skipping TWAP correctness smoke mode=skip"
+    return 0
+  fi
   local tool
   tool="$(tool_path "$root" twap_current_task_runtime_test)"
   local out="$RUN_DIR/correctness.log"
@@ -287,6 +291,22 @@ run_correctness() {
     log "WARN correctness tool rc=$rc, but push_only marker passed; ignoring non-push checks"
   fi
   log "correctness passed"
+}
+
+prepare_account_desc_fixture() {
+  local root="$1"
+  local token="$2"
+  local tool
+  tool="$(tool_path "$root" twap_current_task_runtime_test)"
+  local out="$RUN_DIR/prepare_account_desc.log"
+  if [ ! -x "$tool" ]; then
+    write_failure "correctness_tool_missing:$tool" "pass" "failed" "not_run"
+  fi
+  log "preparing TWAP accountDesc fixture before runner cache load"
+  if ! "$tool" --endpoint "$ENDPOINT" --token "$token" --user-id "$USER_ID" --prepare-account-desc-only > "$out" 2>&1; then
+    tail -120 "$out" > "$RUN_DIR/prepare_account_desc_tail.txt" 2>/dev/null || true
+    write_failure "prepare_account_desc_failed" "pass" "failed" "not_run"
+  fi
 }
 
 run_perf_case() {
@@ -457,6 +477,9 @@ main() {
     build_root "control" "$CONTROL_ROOT"
   fi
 
+  if [ "$TWAP_CORRECTNESS_MODE" != "skip" ]; then
+    prepare_account_desc_fixture "$ROOT" "$token"
+  fi
   start_runner "candidate_correctness" "$ROOT"
   run_correctness "$ROOT" "$token"
   stop_runner "$ROOT"
