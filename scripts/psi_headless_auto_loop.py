@@ -73,6 +73,7 @@ STOP_REASONS_GLOBAL = {
     "no_targets",
     "remote_failed",
     "repeated_infra_failure",
+    "control_baseline_unhealthy",
     "user_stopped",
 }
 
@@ -1249,6 +1250,8 @@ def _twap_batch_stats(batch_state: dict[str, Any]) -> dict[str, Any]:
             "candidate_p95_ms": [],
             "p95_benefit_ms": [],
             "case_delta_summary": "",
+            "control_lost_total": 0,
+            "candidate_lost_total": 0,
             "max_normal_regression_ms": None,
             "max_stress_regression_ms": None,
             "max_normal_regression_ms_text": "",
@@ -1260,6 +1263,8 @@ def _twap_batch_stats(batch_state: dict[str, Any]) -> dict[str, Any]:
     p95_benefit: list[float] = []
     normal_regressions: list[float] = []
     stress_regressions: list[float] = []
+    control_lost_total = 0
+    candidate_lost_total = 0
     rendered: list[str] = []
     for row in case_deltas:
         if not isinstance(row, dict):
@@ -1268,6 +1273,12 @@ def _twap_batch_stats(batch_state: dict[str, Any]) -> dict[str, Any]:
         ctrl = _float_or_none(row.get("control_p95_ms"))
         cand = _float_or_none(row.get("candidate_p95_ms"))
         raw_delta = _float_or_none(row.get("p95_delta_ms"))
+        control_lost = _float_or_none(row.get("control_lost"))
+        candidate_lost = _float_or_none(row.get("candidate_lost"))
+        if control_lost is not None:
+            control_lost_total += int(control_lost)
+        if candidate_lost is not None:
+            candidate_lost_total += int(candidate_lost)
         if ctrl is not None:
             control_p95.append(ctrl)
         if cand is not None:
@@ -1290,6 +1301,8 @@ def _twap_batch_stats(batch_state: dict[str, Any]) -> dict[str, Any]:
         "candidate_p95_ms": candidate_p95,
         "p95_benefit_ms": p95_benefit,
         "case_delta_summary": ";".join(rendered),
+        "control_lost_total": control_lost_total,
+        "candidate_lost_total": candidate_lost_total,
         "max_normal_regression_ms": max_normal,
         "max_stress_regression_ms": max_stress,
         "max_normal_regression_ms_text": f"{max_normal:.3f}",
@@ -1653,6 +1666,9 @@ def judge_verdict(batch_state: dict[str, Any]) -> tuple[str, str]:
 
     twap_stats = _twap_batch_stats(batch_state)
     if twap_stats.get("case_count"):
+        control_lost_total = int(twap_stats.get("control_lost_total") or 0)
+        if control_lost_total > 0:
+            return "infra_blocked", f"TWAP control baseline lost pushes: control_lost_total={control_lost_total}"
         lost_failure_count = int(batch_state.get("lost_failure_count") or 0)
         if lost_failure_count > 0:
             return "rejected", f"TWAP push timing lost messages: lost_failure_count={lost_failure_count}"
@@ -1938,6 +1954,8 @@ def iteration_step(
         set_patch_status(run_dir, candidate["candidate_id"], "reverted", note="noisy; reverted pending rerun")
     elif verdict == "rejected":
         set_patch_status(run_dir, candidate["candidate_id"], "reverted", note="rejected; reverted")
+    elif verdict == "infra_blocked":
+        set_patch_status(run_dir, candidate["candidate_id"], "reverted", note=f"infra blocked; {retry_condition}")
 
     record_attempt(
         run_dir,
@@ -1958,7 +1976,8 @@ def iteration_step(
         verdict_reason=retry_condition,
     )
 
-    return candidate, verdict, "", lanes, batch_state
+    iter_stop = "control_baseline_unhealthy" if verdict == "infra_blocked" else ""
+    return candidate, verdict, iter_stop, lanes, batch_state
 
 
 # ------------------------------- main loop -------------------------------
@@ -2133,6 +2152,10 @@ def main() -> int:
                 break
             # candidate-level skip; continue
             continue
+        if iter_stop == "control_baseline_unhealthy":
+            stop_reason = "control_baseline_unhealthy"
+            stop_detail = f"candidate {candidate['candidate_id']} stopped because TWAP control baseline lost pushes"
+            break
 
         accepted, neutral, rejected, noisy = count_verdict_rows(run_dir)
         write_run_state(

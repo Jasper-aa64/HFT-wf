@@ -205,7 +205,7 @@ class TwapHarnessReplayTests(unittest.TestCase):
                     "control_p95_ms": "250.0",
                     "candidate_p95_ms": "312.0",
                     "p95_delta_ms": 62.0,
-                    "control_lost": "99",
+                    "control_lost": "0",
                     "candidate_lost": "102",
                 }
             ],
@@ -215,6 +215,90 @@ class TwapHarnessReplayTests(unittest.TestCase):
 
         self.assertEqual(verdict, "rejected")
         self.assertEqual(reason, "TWAP push timing lost messages: lost_failure_count=2")
+
+    def test_control_lost_pushes_blocks_as_infra_not_candidate_verdict(self) -> None:
+        batch_state = {
+            "compare_status": "pass",
+            "decision": "screening_only",
+            "reason": "completed",
+            "lost_failure_count": 1,
+            "twap_case_deltas": [
+                {
+                    "case": "500_i20",
+                    "control_p95_ms": "1085.0",
+                    "candidate_p95_ms": "53.0",
+                    "p95_delta_ms": "",
+                    "control_lost": "161",
+                    "candidate_lost": "0",
+                }
+            ],
+            "twap_timing_samples": [
+                {
+                    "case": "500_i20",
+                    "role": "control",
+                    "sent": "500",
+                    "received": "339",
+                    "lost": "161",
+                    "p95_ms": "1085.0",
+                },
+                {
+                    "case": "500_i20",
+                    "role": "candidate",
+                    "sent": "500",
+                    "received": "500",
+                    "lost": "0",
+                    "p95_ms": "53.0",
+                },
+            ],
+        }
+
+        with tempfile.TemporaryDirectory(prefix="twap_control_lost_test_") as raw_dir:
+            run_dir = Path(raw_dir)
+            loop.ensure_run_dir(run_dir)
+            candidate = {
+                "candidate_id": "twap_control_unhealthy",
+                "lane": "evidence",
+                "target": "twap.push.test",
+                "touched_files": ["PsiGrpcServer/twap_sale_service.cpp"],
+                "semantic_risk": "low",
+                "hypothesis": "fixture candidate",
+            }
+
+            verdict, reason = loop.judge_verdict(batch_state)
+            if verdict == "neutral":
+                loop.record_neutral_pool_entry(run_dir, candidate, batch_state, reason)
+            loop.record_attempt(
+                run_dir,
+                iteration=1,
+                candidate=candidate,
+                batch_state=batch_state,
+                verdict=verdict,
+                retry_condition=reason,
+                stop_reason="control_baseline_unhealthy",
+                notes="fixture replay",
+            )
+            loop.upsert_timing_from_batch(
+                run_dir,
+                candidate,
+                batch_state,
+                "17062",
+                verdict=verdict,
+                verdict_reason=reason,
+            )
+
+            self.assertEqual(verdict, "infra_blocked")
+            self.assertEqual(reason, "TWAP control baseline lost pushes: control_lost_total=161")
+            self.assertEqual(read_tsv(run_dir / "neutral_pool.tsv"), [])
+
+            attempts = read_tsv(run_dir / "attempts.tsv")
+            self.assertEqual(attempts[0]["verdict"], "infra_blocked")
+            self.assertEqual(attempts[0]["timing_verdict"], "infra_blocked")
+
+            history = read_tsv(run_dir / "timing_history.tsv")
+            candidate_rows = [row for row in history if row["kind"] == "candidate"]
+            self.assertEqual(len(candidate_rows), 1)
+            self.assertEqual(candidate_rows[0]["verdict"], "infra_blocked")
+            self.assertEqual(candidate_rows[0]["timing_verdict"], "infra_blocked")
 
 
 if __name__ == "__main__":
