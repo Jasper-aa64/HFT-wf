@@ -394,3 +394,56 @@ stress case has no configured regression
 
 If every generated candidate has already been attempted and no combination
 candidate remains, the run must stop with `no_targets` instead of looping.
+
+### 10.1 Reporting Fixes From First Long Run
+
+The first TWAP long run exposed a reporting bug:
+
+```text
+remote comparison_summary.json had case timing samples
+local attempts.tsv / timing_history.tsv did not preserve the TWAP timing surface
+```
+
+The controller must therefore map TWAP remote fields into the local ledger:
+
+```text
+case_deltas -> attempts.tsv twap_case_deltas
+candidate p95 values -> attempts.tsv samples_ms
+remote timing_samples -> timing_history.tsv per case / role rows
+stress and normal p95 regressions -> attempts.tsv regression columns
+```
+
+`timing_status=pass` means the remote timing tool completed and did not lose
+pushes. It does not mean the candidate is worth keeping. The local `verdict`
+remains the promotion authority.
+
+### 10.2 TWAP Rejection Rules
+
+A TWAP candidate must be rejected, not neutral, when it has a clear important
+regression:
+
+```text
+lost > 0
+normal-frequency p95 regression > 1.0 ms on 500_i20 or 1000_i20
+stress p95 regression > 5.0 ms on 500_i5
+remote decision = rejected
+```
+
+`neutral` is reserved for small or inconclusive movement without a material
+regression. It is not a bucket for risky or clearly slower patches.
+
+### 10.3 Patch Agent Safety Rules
+
+The TWAP patch agent must avoid semantic rewrites while exploring optimization.
+In particular:
+
+```text
+do not cache/reuse TwapSalePushMessage across users, client sessions, or requests
+do not move userId-dependent JSON construction outside the user/request-specific path
+do not convert per-user buildTwapSaleAggregationPushMessage into a shared cached message
+do not label collect-then-aggregate -> scan-and-aggregate rewrites as low risk
+```
+
+Safe low-risk examples are narrow changes such as `reserve(...)`, removing a
+proven duplicate lookup, or reusing a local account+stock key string inside the
+same account iteration.

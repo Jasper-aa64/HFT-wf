@@ -389,9 +389,15 @@ normal_cases = [delta for delta in case_deltas if delta["case"] in {"500_i20", "
 stress_cases = [delta for delta in case_deltas if delta["case"] in {"500_i5"}]
 min_normal_p95_improvement_ms = float(os.environ["MIN_NORMAL_P95_IMPROVEMENT_MS"])
 max_stress_p95_regression_ms = float(os.environ["MAX_STRESS_P95_REGRESSION_MS"])
+max_normal_p95_regression_ms = 1.0
 normal_improved = bool(normal_cases) and all(
     isinstance(delta.get("p95_delta_ms"), (int, float))
     and delta["p95_delta_ms"] <= -min_normal_p95_improvement_ms
+    for delta in normal_cases
+)
+normal_regression_ok = all(
+    isinstance(delta.get("p95_delta_ms"), (int, float))
+    and delta["p95_delta_ms"] <= max_normal_p95_regression_ms
     for delta in normal_cases
 )
 stress_regression_ok = all(
@@ -411,7 +417,8 @@ accepted = (
 )
 decision = os.environ["DECISION"]
 if decision == "auto":
-    decision = "promotion_candidate" if accepted else "screening_only"
+    rejected = bool(lost_failures) or not normal_regression_ok or not stress_regression_ok
+    decision = "promotion_candidate" if accepted else "rejected" if rejected else "screening_only"
 
 payload = {
     "schema": "twap_headless_comparison_summary_v1",
@@ -428,7 +435,9 @@ payload = {
     "lost_failure_count": len(lost_failures),
     "has_control": has_control,
     "normal_frequency_p95_improved": normal_improved,
+    "normal_frequency_p95_regression_ok": normal_regression_ok,
     "normal_frequency_min_p95_improvement_ms": min_normal_p95_improvement_ms,
+    "normal_frequency_max_p95_regression_ms": max_normal_p95_regression_ms,
     "stress_p95_regression_ok": stress_regression_ok,
     "stress_max_p95_regression_ms": max_stress_p95_regression_ms,
     "case_deltas": case_deltas,

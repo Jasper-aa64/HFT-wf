@@ -40,6 +40,7 @@ import csv
 import json
 import os
 import random
+import re
 import shlex
 import shutil
 import statistics
@@ -231,6 +232,9 @@ ATTEMPTS_FIELDS = [
     "control_median_ms",
     "candidate_median_ms",
     "delta_ms",
+    "twap_case_deltas",
+    "twap_max_normal_regression_ms",
+    "twap_max_stress_regression_ms",
     "compare_result",
     "noise_flag",
     "verdict",
@@ -600,6 +604,43 @@ def _validate_patch_boundaries(changed_files: list[str]) -> list[str]:
     return violations
 
 
+def _validate_patch_semantic_guards(patch_text: str) -> list[str]:
+    """Reject known unsafe TWAP optimization shapes before remote timing.
+
+    The performance harness is allowed to test small local optimizations, but
+    it should not spend time on patches that change per-user push semantics.
+    """
+
+    added_lines = [
+        line[1:].strip()
+        for line in patch_text.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    ]
+    added_text = "\n".join(added_lines)
+    lower_added = added_text.lower()
+    violations: list[str] = []
+
+    reuses_push_message = (
+        "buildtwapsaleaggregationpushmessage(userid, stock_code, cmd)" in lower_added
+        and (
+            "cached_push" in lower_added
+            or "stock_push_message" in lower_added
+            or "has_cached" in lower_added
+            or "initialized" in lower_added
+        )
+        and re.search(r"\bTwapSalePushMessage\s+\w+", added_text) is not None
+    )
+    if reuses_push_message:
+        violations.append(
+            "unsafe TWAP push-message reuse: aggregation push payload is user/request dependent"
+        )
+
+    if "static TwapSalePushMessage" in added_text:
+        violations.append("unsafe static TwapSalePushMessage cache in push path")
+
+    return violations
+
+
 def _remote_quote(value: str | Path) -> str:
     return shlex.quote(str(value))
 
@@ -881,6 +922,11 @@ def materialize_candidate_patch(
     patch_body = diff.stdout
     if not patch_body.strip():
         return fail("patch materialization produced an empty diff", patch_body)
+    semantic_violations = _validate_patch_semantic_guards(
+        patch_body.decode("utf-8", errors="replace")
+    )
+    if semantic_violations:
+        return fail("patch violates semantic guard: " + "; ".join(semantic_violations), patch_body)
 
     register_patch(
         run_dir,
@@ -1186,6 +1232,71 @@ def _dry_run_remote_batch(
 # ------------------------------- verdict application -------------------------------
 
 
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _twap_batch_stats(batch_state: dict[str, Any]) -> dict[str, Any]:
+    case_deltas = batch_state.get("twap_case_deltas")
+    if not isinstance(case_deltas, list):
+        return {
+            "case_deltas": [],
+            "case_count": 0,
+            "control_p95_ms": [],
+            "candidate_p95_ms": [],
+            "p95_benefit_ms": [],
+            "case_delta_summary": "",
+            "max_normal_regression_ms": None,
+            "max_stress_regression_ms": None,
+            "max_normal_regression_ms_text": "",
+            "max_stress_regression_ms_text": "",
+        }
+
+    control_p95: list[float] = []
+    candidate_p95: list[float] = []
+    p95_benefit: list[float] = []
+    normal_regressions: list[float] = []
+    stress_regressions: list[float] = []
+    rendered: list[str] = []
+    for row in case_deltas:
+        if not isinstance(row, dict):
+            continue
+        case = str(row.get("case") or "")
+        ctrl = _float_or_none(row.get("control_p95_ms"))
+        cand = _float_or_none(row.get("candidate_p95_ms"))
+        raw_delta = _float_or_none(row.get("p95_delta_ms"))
+        if ctrl is not None:
+            control_p95.append(ctrl)
+        if cand is not None:
+            candidate_p95.append(cand)
+        if raw_delta is not None:
+            p95_benefit.append(-raw_delta)
+            if raw_delta > 0:
+                if case in {"500_i20", "1000_i20"}:
+                    normal_regressions.append(raw_delta)
+                if case in {"500_i5"}:
+                    stress_regressions.append(raw_delta)
+        rendered.append(f"{case}:{row.get('p95_delta_ms', '')}")
+
+    max_normal = max(normal_regressions) if normal_regressions else 0.0
+    max_stress = max(stress_regressions) if stress_regressions else 0.0
+    return {
+        "case_deltas": case_deltas,
+        "case_count": len([row for row in case_deltas if isinstance(row, dict)]),
+        "control_p95_ms": control_p95,
+        "candidate_p95_ms": candidate_p95,
+        "p95_benefit_ms": p95_benefit,
+        "case_delta_summary": ";".join(rendered),
+        "max_normal_regression_ms": max_normal,
+        "max_stress_regression_ms": max_stress,
+        "max_normal_regression_ms_text": f"{max_normal:.3f}",
+        "max_stress_regression_ms_text": f"{max_stress:.3f}",
+    }
+
+
 def record_attempt(
     run_dir: Path,
     *,
@@ -1197,8 +1308,9 @@ def record_attempt(
     stop_reason: str,
     notes: str = "",
 ) -> None:
+    twap_stats = _twap_batch_stats(batch_state)
     timing_notes = notes
-    case_deltas = batch_state.get("twap_case_deltas")
+    case_deltas = twap_stats.get("case_deltas", [])
     if isinstance(case_deltas, list) and case_deltas:
         rendered = []
         for delta in case_deltas:
@@ -1209,6 +1321,16 @@ def record_attempt(
             )
         if rendered:
             timing_notes = (timing_notes + "; " if timing_notes else "") + "twap_case_deltas[" + "; ".join(rendered) + "]"
+    candidate_samples = batch_state.get("candidate_samples_ms") or twap_stats.get("candidate_p95_ms", [])
+    control_median = batch_state.get("control_median_ms")
+    if not control_median and twap_stats.get("control_p95_ms"):
+        control_median = statistics.median(twap_stats["control_p95_ms"])
+    candidate_median = batch_state.get("candidate_median_ms")
+    if not candidate_median and twap_stats.get("candidate_p95_ms"):
+        candidate_median = statistics.median(twap_stats["candidate_p95_ms"])
+    delta_ms = batch_state.get("delta_ms")
+    if not delta_ms and twap_stats.get("p95_benefit_ms"):
+        delta_ms = statistics.median(twap_stats["p95_benefit_ms"])
     row = {
         "iteration": iteration,
         "candidate_id": candidate["candidate_id"],
@@ -1220,16 +1342,18 @@ def record_attempt(
         "semantic_risk": candidate.get("semantic_risk", ""),
         "build_status": batch_state.get("build_status", ""),
         "compare_status": batch_state.get("compare_status", ""),
-        "paired_sample_count": str(batch_state.get("paired_sample_count", "")),
+        "paired_sample_count": str(batch_state.get("paired_sample_count", "") or twap_stats.get("case_count", "")),
         "timing_verdict": batch_state.get("timing_verdict", batch_state.get("timing_status", "")),
-        "sample_count": len(batch_state.get("candidate_samples_ms") or [])
-        or len([row for row in (batch_state.get("twap_timing_samples") or []) if isinstance(row, dict) and row.get("role") == "candidate"]),
+        "sample_count": len(candidate_samples),
         "samples_ms": ",".join(
-            f"{v:.3f}" for v in (batch_state.get("candidate_samples_ms") or [])
+            f"{v:.3f}" for v in candidate_samples
         ),
-        "control_median_ms": f"{batch_state.get('control_median_ms', 0) or 0:.3f}",
-        "candidate_median_ms": f"{batch_state.get('candidate_median_ms', 0) or 0:.3f}",
-        "delta_ms": f"{batch_state.get('delta_ms', 0) or 0:.3f}",
+        "control_median_ms": f"{control_median or 0:.3f}",
+        "candidate_median_ms": f"{candidate_median or 0:.3f}",
+        "delta_ms": f"{delta_ms or 0:.3f}",
+        "twap_case_deltas": twap_stats.get("case_delta_summary", ""),
+        "twap_max_normal_regression_ms": twap_stats.get("max_normal_regression_ms_text", ""),
+        "twap_max_stress_regression_ms": twap_stats.get("max_stress_regression_ms_text", ""),
         "compare_result": batch_state.get("compare_status", ""),
         "noise_flag": batch_state.get("noise_flag", ""),
         "verdict": verdict,
@@ -1247,6 +1371,28 @@ def record_neutral_pool_entry(
     batch_state: dict[str, Any],
     retry_condition: str,
 ) -> None:
+    twap_stats = _twap_batch_stats(batch_state)
+    candidate_samples = batch_state.get("candidate_samples_ms") or twap_stats.get("candidate_p95_ms", [])
+    median_ms = batch_state.get("candidate_median_ms")
+    if not median_ms and candidate_samples:
+        median_ms = statistics.median(candidate_samples)
+    delta_ms = batch_state.get("delta_ms")
+    if not delta_ms and twap_stats.get("p95_benefit_ms"):
+        delta_ms = statistics.median(twap_stats["p95_benefit_ms"])
+    range_ms = (max(candidate_samples) - min(candidate_samples)) if len(candidate_samples) > 1 else 0.0
+    timing_summary = (
+        f"sample_count={len(candidate_samples)};"
+        f" median_ms={median_ms or 0:.3f};"
+        f" delta_ms={delta_ms or 0:.3f};"
+        f" range_ms={range_ms:.3f};"
+        f" n={len(candidate_samples)}"
+    )
+    if twap_stats.get("case_delta_summary"):
+        timing_summary += (
+            f"; twap_case_deltas={twap_stats['case_delta_summary']};"
+            f" max_normal_regression_ms={twap_stats['max_normal_regression_ms_text']};"
+            f" max_stress_regression_ms={twap_stats['max_stress_regression_ms_text']}"
+        )
     existing = read_tsv(run_dir / "neutral_pool.tsv")
     existing = [
         row for row in existing if (row.get("candidate_id") or "") != candidate["candidate_id"]
@@ -1258,13 +1404,7 @@ def record_neutral_pool_entry(
         "touched_files": "|".join(candidate.get("touched_files", [])),
         "hypothesis": candidate.get("hypothesis", ""),
         "compare_result": batch_state.get("compare_status", ""),
-        "timing_summary": (
-            f"sample_count={len(batch_state.get('candidate_samples_ms') or [])};"
-            f" median_ms={batch_state.get('candidate_median_ms', 0):.3f};"
-            f" delta_ms={batch_state.get('delta_ms', 0):.3f};"
-            f" range_ms={(max(batch_state.get('candidate_samples_ms') or [0]) - min(batch_state.get('candidate_samples_ms') or [0])):.3f};"
-            f" n={len(batch_state.get('candidate_samples_ms') or [])}"
-        ),
+        "timing_summary": timing_summary,
         "semantic_risk": candidate.get("semantic_risk", ""),
         "stack_compatibility": (
             candidate.get("stack_compatibility")
@@ -1315,6 +1455,98 @@ def upsert_timing_from_batch(
 
     control_samples = batch_state.get("control_samples_ms") or []
     candidate_samples = batch_state.get("candidate_samples_ms") or []
+    twap_timing_samples = batch_state.get("twap_timing_samples") or []
+    twap_case_deltas = {
+        str(row.get("case") or ""): row
+        for row in (batch_state.get("twap_case_deltas") or [])
+        if isinstance(row, dict)
+    }
+    if isinstance(twap_timing_samples, list) and twap_timing_samples:
+        recorded_at = utc_now()
+        rows: list[dict[str, str]] = []
+        for sample in twap_timing_samples:
+            if not isinstance(sample, dict):
+                continue
+            case = str(sample.get("case") or "")
+            role = str(sample.get("role") or "")
+            if role not in {"control", "candidate"} or not case:
+                continue
+            delta_row = twap_case_deltas.get(case, {})
+            raw_p95_delta = _float_or_none(delta_row.get("p95_delta_ms"))
+            benefit_ms = -raw_p95_delta if raw_p95_delta is not None else None
+            received = str(sample.get("received") or sample.get("count") or "")
+            rows.append(
+                {
+                    "history_key": f"{run_dir.name}|{candidate['candidate_id']}|{case}|{role}",
+                    "recorded_at": recorded_at,
+                    "time_window": recorded_at[:10],
+                    "bundle_id": run_dir.name,
+                    "run_id": run_dir.name,
+                    "source_attempts_path": str(run_dir / "attempts.tsv"),
+                    "host_key": host_key,
+                    "control_head": os.environ.get("PSI_CONTROL_HEAD", "auto_loop"),
+                    "active_gate": "twap headless remote",
+                    "compatibility_group": "twap_position_push",
+                    "compatibility_tag": case,
+                    "warm_or_cold": "measured",
+                    "sample_unit": "ms",
+                    "kind": role,
+                    "policy_bucket": candidate["lane"] if role == "candidate" else "control",
+                    "experiment_kind": "neutral_stack" if candidate["lane"] == "combination" else "single",
+                    "target": candidate["target"] if role == "candidate" else "control baseline",
+                    "stage": f"{candidate['target']}|{case}",
+                    "sample_count": received,
+                    "samples_ms": "",
+                    "samples": "",
+                    "mean_ms": str(sample.get("avg_ms") or ""),
+                    "mean_seconds": "",
+                    "median_ms": str(sample.get("p50_ms") or ""),
+                    "median_seconds": "",
+                    "mad_ms": "",
+                    "mad_seconds": "",
+                    "iqr_ms": "",
+                    "iqr_seconds": "",
+                    "stdev_ms": "",
+                    "stdev_seconds": "",
+                    "range_ms": "",
+                    "range_seconds": "",
+                    "delta_ms": f"{benefit_ms:.3f}" if role == "candidate" and benefit_ms is not None else "",
+                    "delta_seconds": f"{benefit_ms / 1000.0:.6f}" if role == "candidate" and benefit_ms is not None else "",
+                    "timing_verdict": batch_state.get("timing_status", "") if role == "candidate" else "",
+                    "timing_verdict_reason": batch_state.get("reason", ""),
+                    "timing_verdict_method": "twap_headless_remote",
+                    "control_sample_count": received if role == "control" else "",
+                    "candidate_sample_count": received if role == "candidate" else "",
+                    "paired_sample_count": "1" if role == "candidate" and case in twap_case_deltas else "",
+                    "control_median_ms": str(delta_row.get("control_p95_ms") or "") if role == "candidate" else "",
+                    "control_median_seconds": "",
+                    "control_samples_ms": str(delta_row.get("control_p95_ms") or "") if role == "candidate" else "",
+                    "candidate_samples_ms": str(delta_row.get("candidate_p95_ms") or "") if role == "candidate" else "",
+                    "paired_deltas_ms": f"{benefit_ms:.3f}" if role == "candidate" and benefit_ms is not None else "",
+                    "paired_deltas_seconds": f"{benefit_ms / 1000.0:.6f}" if role == "candidate" and benefit_ms is not None else "",
+                    "median_delta_ms": f"{benefit_ms:.3f}" if role == "candidate" and benefit_ms is not None else "",
+                    "median_delta_seconds": f"{benefit_ms / 1000.0:.6f}" if role == "candidate" and benefit_ms is not None else "",
+                    "bootstrap_ci_low_ms": "",
+                    "bootstrap_ci_high_ms": "",
+                    "bootstrap_ci_low_seconds": "",
+                    "bootstrap_ci_high_seconds": "",
+                    "permutation_p_value": "",
+                    "paired_stdev_ms": "",
+                    "paired_range_ms": "",
+                    "paired_mean_ms": "",
+                    "noise_flag": batch_state.get("noise_flag", "ok"),
+                    "verdict": batch_state.get("timing_status", "") if role == "candidate" else "",
+                    "notes": (
+                        f"case={case}; sent={sample.get('sent', '')}; received={sample.get('received', '')}; "
+                        f"lost={sample.get('lost', '')}; p95_ms={sample.get('p95_ms', '')}; "
+                        f"p99_ms={sample.get('p99_ms', '')}; max_ms={sample.get('max_ms', '')}; "
+                        f"p95_delta_candidate_minus_control={delta_row.get('p95_delta_ms', '')}"
+                    ),
+                }
+            )
+        if rows:
+            upsert_history_rows(run_dir / "timing_history.tsv", rows)
+            return
     if not control_samples and not candidate_samples:
         return
     recorded_at = utc_now()
@@ -1415,6 +1647,22 @@ def judge_verdict(batch_state: dict[str, Any]) -> tuple[str, str]:
     compare = (batch_state.get("compare_status") or "").lower()
     if compare not in {"pass", "ok"}:
         return "rejected", "compare gate failed; fix patch before retry"
+
+    decision = (batch_state.get("decision") or "").lower()
+    if decision == "rejected":
+        return "rejected", batch_state.get("reason", "") or "remote TWAP gate rejected candidate"
+
+    twap_stats = _twap_batch_stats(batch_state)
+    if twap_stats.get("case_count"):
+        lost_failure_count = int(batch_state.get("lost_failure_count") or 0)
+        if lost_failure_count > 0:
+            return "rejected", f"TWAP push timing lost messages: lost_failure_count={lost_failure_count}"
+        max_normal = float(twap_stats.get("max_normal_regression_ms") or 0.0)
+        max_stress = float(twap_stats.get("max_stress_regression_ms") or 0.0)
+        if max_stress > 5.0:
+            return "rejected", f"TWAP stress p95 regression {max_stress:.3f}ms exceeds 5.000ms"
+        if max_normal > 1.0:
+            return "rejected", f"TWAP normal-frequency p95 regression {max_normal:.3f}ms exceeds 1.000ms"
 
     noise_flag = (batch_state.get("noise_flag") or "").upper()
     timing = (batch_state.get("timing_verdict") or batch_state.get("timing_status") or "").upper()

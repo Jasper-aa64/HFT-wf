@@ -53,8 +53,8 @@ HOTSPOTS = [
         symbols=("buildTwapSaleAggregationPushMessage", "m_userAccountsCache", "m_twapSalePositionCache"),
         base_cost=120.0,
         count=1,
-        risk="low",
-        notes="static_estimate; scans all user accounts for one stock and rebuilds one aggregation payload from caches",
+        risk="medium",
+        notes="static_estimate; scans all user accounts for one stock and rebuilds one aggregation payload from caches; dataflow rewrites are not low-risk",
         expected_delta_seconds=0.006,
     ),
     HotspotSpec(
@@ -73,8 +73,8 @@ HOTSPOTS = [
         symbols=("buildTwapSaleAggregationPushMessage", "subPositionInfo", "std::sort"),
         base_cost=82.0,
         count=1,
-        risk="low",
-        notes="static_estimate; summary accumulation, weighted price, and sub-position sorting run for every push",
+        risk="medium",
+        notes="static_estimate; summary accumulation, weighted price, and sub-position sorting run for every push; changing collect-then-aggregate shape is medium-risk",
         expected_delta_seconds=0.003,
     ),
     HotspotSpec(

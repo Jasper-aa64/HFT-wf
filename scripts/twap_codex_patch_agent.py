@@ -114,6 +114,9 @@ Hard boundaries:
 - Keep the public gRPC/proto interface and JSON payload semantics unchanged.
 - Preserve accountDesc, subPositionInfoList, 0-position push behavior, and searchStockCode filtering behavior.
 - Make a minimal optimization patch only. If the candidate is unsafe, leave files unchanged.
+- Do not cache or reuse TwapSalePushMessage across different client sessions, requests, or userIds.
+- Do not turn per-user/per-request buildTwapSaleAggregationPushMessage calls into a shared cached message unless the prompt explicitly proves the payload is user-independent.
+- Do not rewrite the aggregation dataflow shape (for example, replacing collect-then-aggregate with scan-and-aggregate) for a low-risk candidate.
 
 Candidate:
 - id: {ctx['candidate_id']}
@@ -130,6 +133,9 @@ Implementation guidance:
 - Prefer removing redundant cache lookups and avoidable reallocations.
 - Do not introduce new shared mutable state.
 - Do not change behavior to query the database in push path.
+- Do not move userId-dependent JSON construction outside the user/request-specific branch.
+- Safe examples: reserve vector/JSON array capacity, remove a proven duplicate lookup, reuse a local key string for the same account+stock.
+- Unsafe examples: cross-user push message cache, global aggregation cache, changing subscription filtering semantics, or broad loop restructuring.
 - Do not broaden the patch outside the candidate's touched files.
 
 Relevant source excerpts:
