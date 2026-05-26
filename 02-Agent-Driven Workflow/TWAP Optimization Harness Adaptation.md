@@ -447,3 +447,59 @@ do not label collect-then-aggregate -> scan-and-aggregate rewrites as low risk
 Safe low-risk examples are narrow changes such as `reserve(...)`, removing a
 proven duplicate lookup, or reusing a local account+stock key string inside the
 same account iteration.
+
+## 11. TWAP Runtime Stage Profile Mode
+
+Before opening more TWAP long-run candidates, replace the static source estimate
+with runtime stage evidence.
+
+Use:
+
+```powershell
+python scripts\twap_runtime_stage_profile.py `
+  --source-root C:\Users\liangjunming\Desktop\work\Code2 `
+  --run-dir C:\Users\liangjunming\Desktop\work\harness_runs\twap_runtime_profile_001 `
+  --remote-host root@192.168.170.62 `
+  --remote-hft-root /root/work/HFT-wf `
+  --remote-run-root /root/work/psi_experiments/runs `
+  --remote-workspace-root /root/work/psi_experiments/local_agent_candidates `
+  --env-file /root/work/.toolchain/psi-env-code2.sh `
+  --endpoint 192.168.170.62:18321 `
+  --measure-cases "100:50:120 500:20:180 1000:20:240 500:5:240"
+```
+
+The script copies Code2 into an isolated `instrumented_workspace`, injects
+temporary `[TWAP_PROFILE]` timing logs into the aggregation push path, syncs that
+workspace to remote Linux, runs `scripts/twap_headless_remote.sh`, fetches
+artifacts, and writes:
+
+```text
+runtime_stage_profile.tsv
+profile.tsv
+hotspots.tsv
+runtime_stage_profile_summary.json
+remote_artifacts/
+```
+
+`profile.tsv` keeps all measured stages, including diagnostic total stages such
+as `twap.push.fanout_total`, `twap.push.build_total`, and
+`twap.push.json.total`. `hotspots.tsv` intentionally excludes those diagnostic
+total rows so candidate generation focuses on actionable stages.
+
+The first validated runtime profile run was:
+
+```text
+local run:  C:\Users\liangjunming\Desktop\work\harness_runs\twap_runtime_profile_001
+remote run: /root/work/psi_experiments/runs/twap_runtime_profile_001
+remote build: pass
+TWAP correctness: pass
+timing cases: 100_i50, 500_i20, 1000_i20, 500_i5 all PASS with lost=0
+top actionable stages:
+1. twap.push.message_build_for_sessions
+2. twap.push.json_serialize_total
+3. twap.push.json.write_string
+```
+
+Use the generated `profile.tsv` / `hotspots.tsv` as the evidence surface for the
+next bounded TWAP long-run. Do not continue from `static_estimate` hotspots when
+runtime profile artifacts are available.
