@@ -1720,6 +1720,7 @@ def write_run_state(
     neutral_count: int,
     rejected_count: int,
     noisy_pending_count: int,
+    infra_blocked_count: int,
 ) -> None:
     lane_counts = {lane: len(lanes_snapshot.get(lane, [])) for lane in LANE_PRIORITY}
     state = {
@@ -1739,6 +1740,7 @@ def write_run_state(
         "neutral_count": neutral_count,
         "rejected_count": rejected_count,
         "noisy_pending_count": noisy_pending_count,
+        "infra_blocked_count": infra_blocked_count,
         "first_accepted_stop": first_accepted_stop,
         "infra_failure_count": infra_failures,
         "last_exit_reason": stop_reason,
@@ -1957,6 +1959,7 @@ def iteration_step(
     elif verdict == "infra_blocked":
         set_patch_status(run_dir, candidate["candidate_id"], "reverted", note=f"infra blocked; {retry_condition}")
 
+    attempt_stop_reason = "control_baseline_unhealthy" if verdict == "infra_blocked" else ""
     record_attempt(
         run_dir,
         iteration=iteration,
@@ -1964,7 +1967,7 @@ def iteration_step(
         batch_state=batch_state,
         verdict=verdict,
         retry_condition=retry_condition,
-        stop_reason="",
+        stop_reason=attempt_stop_reason,
         notes=candidate.get("expected_effect", ""),
     )
     upsert_timing_from_batch(
@@ -2034,13 +2037,19 @@ def resolve_stop_file(run_dir: Path, stop_file: str | None) -> Path:
     return run_dir / "STOP"
 
 
-def count_verdict_rows(run_dir: Path) -> tuple[int, int, int, int]:
-    counts = {"accepted": 0, "neutral": 0, "rejected": 0, "NOISY_PENDING": 0}
+def count_verdict_rows(run_dir: Path) -> tuple[int, int, int, int, int]:
+    counts = {"accepted": 0, "neutral": 0, "rejected": 0, "NOISY_PENDING": 0, "infra_blocked": 0}
     for row in read_tsv(run_dir / "attempts.tsv"):
         verdict = (row.get("verdict") or "").strip()
         if verdict in counts:
             counts[verdict] += 1
-    return counts["accepted"], counts["neutral"], counts["rejected"], counts["NOISY_PENDING"]
+    return (
+        counts["accepted"],
+        counts["neutral"],
+        counts["rejected"],
+        counts["NOISY_PENDING"],
+        counts["infra_blocked"],
+    )
 
 
 def main() -> int:
@@ -2084,6 +2093,7 @@ def main() -> int:
         neutral_count=0,
         rejected_count=0,
         noisy_pending_count=0,
+        infra_blocked_count=0,
     )
 
     prior_attempts = read_tsv(run_dir / "attempts.tsv")
@@ -2157,7 +2167,7 @@ def main() -> int:
             stop_detail = f"candidate {candidate['candidate_id']} stopped because TWAP control baseline lost pushes"
             break
 
-        accepted, neutral, rejected, noisy = count_verdict_rows(run_dir)
+        accepted, neutral, rejected, noisy, infra_blocked = count_verdict_rows(run_dir)
         write_run_state(
             run_dir,
             status="running",
@@ -2175,6 +2185,7 @@ def main() -> int:
             neutral_count=neutral,
             rejected_count=rejected,
             noisy_pending_count=noisy,
+            infra_blocked_count=infra_blocked,
         )
         update_heartbeat(
             run_dir,
@@ -2191,7 +2202,7 @@ def main() -> int:
         stop_reason = "budget_stop"
         stop_detail = "max-iterations exhausted without an explicit stop"
 
-    accepted, neutral, rejected, noisy = count_verdict_rows(run_dir)
+    accepted, neutral, rejected, noisy, infra_blocked = count_verdict_rows(run_dir)
     write_run_state(
         run_dir,
         status="stopped",
@@ -2209,6 +2220,7 @@ def main() -> int:
         neutral_count=neutral,
         rejected_count=rejected,
         noisy_pending_count=noisy,
+        infra_blocked_count=infra_blocked,
     )
     update_heartbeat(run_dir, "stopped", stop_detail)
 
@@ -2220,6 +2232,7 @@ def main() -> int:
     print(f"neutral={neutral}")
     print(f"rejected={rejected}")
     print(f"noisy_pending={noisy}")
+    print(f"infra_blocked={infra_blocked}")
     print(f"patch_manifest_path={run_dir / 'patches' / 'patch_manifest.json'}")
     return 0 if stop_reason in {"accepted", "budget_stop", "convergence_proven", "no_targets"} else 1
 
