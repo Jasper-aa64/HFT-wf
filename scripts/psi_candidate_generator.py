@@ -310,6 +310,9 @@ def _evidence_lane(
                 "total_ms": total_ms,
                 "avg_ms": avg_ms,
                 "score_evidence": score,
+                "notes": row.get("notes", ""),
+                "touched_files": _split_touched(row.get("touched_files") or stage),
+                "symbols": _split_touched(row.get("symbols") or ""),
                 "profile_row": profile_by_stage.get(stage, {}),
             },
             rank_score=score or expected_delta_s,
@@ -440,6 +443,9 @@ def _insight_lane(
                 "avg_ms": avg_ms,
                 "score": score,
                 "source": row.get("source", ""),
+                "notes": row.get("notes", ""),
+                "touched_files": _split_touched(row.get("touched_files") or stage),
+                "symbols": _split_touched(row.get("symbols") or ""),
             },
             rank_score=score,
         )
@@ -468,6 +474,10 @@ def _combination_lane(
     for row in neutral_rows:
         target = (row.get("target") or row.get("candidate_id") or "").strip()
         if not target or _is_blocked(target, cooldown_rows):
+            continue
+        if (row.get("lane") or "").strip().lower() == "combination":
+            continue
+        if (row.get("candidate_id") or "").strip().startswith("stack_"):
             continue
         compat = (row.get("stack_compatibility") or "").strip().lower()
         if compat in {"single"}:

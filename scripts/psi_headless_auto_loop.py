@@ -124,6 +124,12 @@ def _merge_comparison_summary(batch_state: dict[str, Any], summary: dict[str, An
             batch_state[field] = summary[field]
     if summary.get("compare_result") and not batch_state.get("compare_status"):
         batch_state["compare_status"] = summary["compare_result"]
+    if summary.get("correctness_status") == "pass" and not batch_state.get("compare_status"):
+        batch_state["compare_status"] = "pass"
+    if summary.get("timing_status") and not batch_state.get("timing_status"):
+        batch_state["timing_status"] = summary["timing_status"]
+    if summary.get("decision") == "promotion_candidate" and summary.get("accepted") is True:
+        batch_state["timing_verdict"] = "accepted"
     paired = summary.get("paired") if isinstance(summary.get("paired"), dict) else {}
     for field in PAIRED_NUMERIC_FIELDS:
         value = paired.get(field, summary.get(field))
@@ -139,6 +145,10 @@ def _merge_comparison_summary(batch_state: dict[str, Any], summary: dict[str, An
         median = _coerce_float(control.get("median_ms"))
         if median is not None:
             batch_state["control_median_ms"] = median
+    if isinstance(summary.get("case_deltas"), list):
+        batch_state["twap_case_deltas"] = summary["case_deltas"]
+    if isinstance(summary.get("timing_samples"), list):
+        batch_state["twap_timing_samples"] = summary["timing_samples"]
 FORBIDDEN_PATCH_FILENAMES = {
     "config.yaml",
     "config.yml",
@@ -259,8 +269,19 @@ COOLDOWN_FIELDS = [
     "source_profile",
     "notes",
 ]
-PROFILE_FIELDS = ["stage", "total_ms", "count", "avg_ms", "source"]
-HOTSPOT_FIELDS = ["rank", "stage", "total_ms", "avg_ms", "count", "score", "notes"]
+PROFILE_FIELDS = ["stage", "total_ms", "count", "avg_ms", "source", "touched_files", "symbols", "notes"]
+HOTSPOT_FIELDS = [
+    "rank",
+    "stage",
+    "total_ms",
+    "avg_ms",
+    "count",
+    "score",
+    "notes",
+    "touched_files",
+    "symbols",
+    "expected_delta_seconds",
+]
 
 
 # ------------------------------- run root setup -------------------------------
@@ -447,6 +468,65 @@ def lanes_are_empty(lanes: dict[str, list[dict[str, Any]]]) -> bool:
     return not any(lanes.get(lane) for lane in LANE_PRIORITY)
 
 
+def _normalize_seed_candidate(raw: dict[str, Any], lane: str, index: int) -> dict[str, Any]:
+    candidate = dict(raw)
+    candidate.setdefault("lane", lane)
+    candidate.setdefault("candidate_id", f"{lane}_seed_{index + 1}")
+    candidate.setdefault("target", candidate["candidate_id"])
+    candidate.setdefault("hypothesis", candidate.get("target", candidate["candidate_id"]))
+    candidate.setdefault("expected_effect", "seeded candidate")
+    candidate.setdefault("semantic_risk", "medium")
+    candidate.setdefault("touched_files", [])
+    candidate.setdefault("source_evidence", {"kind": "seed_file"})
+    candidate.setdefault("stack_members", [])
+    candidate.setdefault("stack_compatibility", "single")
+    candidate.setdefault("rank_score", 0.0)
+
+    missing = [
+        field
+        for field in ("candidate_id", "lane", "target", "hypothesis", "expected_effect", "semantic_risk")
+        if not str(candidate.get(field) or "").strip()
+    ]
+    if missing:
+        raise ValueError(f"seed candidate missing required fields {missing}: {raw!r}")
+    if candidate["lane"] not in LANE_PRIORITY:
+        raise ValueError(f"seed candidate has unsupported lane {candidate['lane']!r}: {candidate['candidate_id']}")
+    if not isinstance(candidate.get("touched_files"), list):
+        raise ValueError(f"seed candidate touched_files must be a list: {candidate['candidate_id']}")
+    if not isinstance(candidate.get("source_evidence"), dict):
+        candidate["source_evidence"] = {"kind": "seed_file", "raw": candidate["source_evidence"]}
+    return candidate
+
+
+def load_candidate_seed_file(path: Path) -> dict[str, list[dict[str, Any]]]:
+    payload = read_json(path)
+    lanes: dict[str, list[dict[str, Any]]] = {lane: [] for lane in LANE_PRIORITY}
+    if not payload:
+        return lanes
+
+    if isinstance(payload.get("candidates"), list):
+        for index, raw in enumerate(payload["candidates"]):
+            if not isinstance(raw, dict):
+                raise ValueError(f"seed candidate #{index + 1} is not an object")
+            lane = str(raw.get("lane") or "evidence")
+            candidate = _normalize_seed_candidate(raw, lane, index)
+            lanes[candidate["lane"]].append(candidate)
+        return lanes
+
+    for lane in LANE_PRIORITY:
+        items = payload.get(lane, [])
+        if items is None:
+            items = []
+        if not isinstance(items, list):
+            raise ValueError(f"seed lane {lane!r} must be a list")
+        for index, raw in enumerate(items):
+            if not isinstance(raw, dict):
+                raise ValueError(f"seed lane {lane!r} item #{index + 1} is not an object")
+            candidate = _normalize_seed_candidate(raw, lane, index)
+            lanes[candidate["lane"]].append(candidate)
+    return lanes
+
+
 # ------------------------------- patch materialization -------------------------------
 
 
@@ -619,7 +699,17 @@ def _prepare_workspace(source_root: Path, workspace: Path, *, refresh: bool) -> 
             return True, ""
         shutil.rmtree(workspace)
     try:
-        ignore = shutil.ignore_patterns(".git", "build", "experiments", "headless_runs")
+        ignore = shutil.ignore_patterns(
+            ".git",
+            ".codex_build",
+            ".gatekeeper_worktrees",
+            ".trellis",
+            ".trellis-backup*",
+            "build",
+            "gatekeeper_runs",
+            "experiments",
+            "headless_runs",
+        )
         shutil.copytree(source_root, workspace, ignore=ignore)
     except Exception as exc:
         return False, f"candidate workspace copy failed: {exc}"
@@ -949,6 +1039,8 @@ def call_ssh_remote_batch(
         candidate_build_dir = _remote_default_build_dir(remote_ws)
         remote_env["BUILD_DIR"] = candidate_build_dir
         remote_env["CANDIDATE_RUNNER"] = _remote_default_runner(candidate_build_dir)
+        if args.control_root or args.root:
+            remote_env["CONTROL_ROOT"] = str(args.control_root or args.root)
         if not args.runner:
             control_root = str(args.root or "/root/work/Code1/psi-trader-liangjunming")
             remote_env["RUNNER"] = _remote_default_runner(_remote_default_build_dir(control_root))
@@ -958,6 +1050,12 @@ def call_ssh_remote_batch(
         remote_env["CANDIDATE_RUNNER"] = str(args.candidate_runner)
     if args.build_dir and not remote_ws:
         remote_env["BUILD_DIR"] = str(args.build_dir)
+    if args.twap_endpoint:
+        remote_env["ENDPOINT"] = str(args.twap_endpoint)
+    if args.twap_user_id:
+        remote_env["USER_ID"] = str(args.twap_user_id)
+    if args.twap_measure_cases:
+        remote_env["MEASURE_CASES"] = str(args.twap_measure_cases)
 
     env_prefix = " ".join(f"{key}={_remote_quote(value)}" for key, value in remote_env.items())
     remote_batch_script = args.remote_batch_script or str(args.batch_script)
@@ -1099,6 +1197,18 @@ def record_attempt(
     stop_reason: str,
     notes: str = "",
 ) -> None:
+    timing_notes = notes
+    case_deltas = batch_state.get("twap_case_deltas")
+    if isinstance(case_deltas, list) and case_deltas:
+        rendered = []
+        for delta in case_deltas:
+            if not isinstance(delta, dict):
+                continue
+            rendered.append(
+                f"{delta.get('case', '')}:p95_delta_ms={delta.get('p95_delta_ms', '')},lost={delta.get('candidate_lost', '')}"
+            )
+        if rendered:
+            timing_notes = (timing_notes + "; " if timing_notes else "") + "twap_case_deltas[" + "; ".join(rendered) + "]"
     row = {
         "iteration": iteration,
         "candidate_id": candidate["candidate_id"],
@@ -1112,7 +1222,8 @@ def record_attempt(
         "compare_status": batch_state.get("compare_status", ""),
         "paired_sample_count": str(batch_state.get("paired_sample_count", "")),
         "timing_verdict": batch_state.get("timing_verdict", batch_state.get("timing_status", "")),
-        "sample_count": len(batch_state.get("candidate_samples_ms") or []),
+        "sample_count": len(batch_state.get("candidate_samples_ms") or [])
+        or len([row for row in (batch_state.get("twap_timing_samples") or []) if isinstance(row, dict) and row.get("role") == "candidate"]),
         "samples_ms": ",".join(
             f"{v:.3f}" for v in (batch_state.get("candidate_samples_ms") or [])
         ),
@@ -1125,7 +1236,7 @@ def record_attempt(
         "retry_condition": retry_condition,
         "stop_reason": stop_reason,
         "recorded_at": utc_now(),
-        "notes": notes,
+        "notes": timing_notes,
     }
     append_tsv_row(run_dir / "attempts.tsv", row, ATTEMPTS_FIELDS)
 
@@ -1155,7 +1266,11 @@ def record_neutral_pool_entry(
             f" n={len(batch_state.get('candidate_samples_ms') or [])}"
         ),
         "semantic_risk": candidate.get("semantic_risk", ""),
-        "stack_compatibility": candidate.get("stack_compatibility", "single"),
+        "stack_compatibility": (
+            candidate.get("stack_compatibility")
+            if candidate.get("stack_compatibility") and candidate.get("stack_compatibility") != "single"
+            else ("stackable" if (candidate.get("semantic_risk") or "").lower() == "low" else "single")
+        ),
         "retry_condition": retry_condition,
         "recorded_at": utc_now(),
     }
@@ -1405,6 +1520,56 @@ def seed_profile_if_missing(run_dir: Path) -> None:
     write_tsv(run_dir / "hotspots.tsv", hotspots, HOTSPOT_FIELDS)
 
 
+def is_twap_run(args: argparse.Namespace) -> bool:
+    marker = " ".join(
+        [
+            str(args.remote_batch_script or ""),
+            str(args.batch_script or ""),
+            str(args.patch_command or ""),
+            str(args.twap_endpoint or ""),
+        ]
+    ).lower()
+    return "twap" in marker
+
+
+def seed_twap_profile_if_missing(args: argparse.Namespace, run_dir: Path) -> None:
+    """Create TWAP profile/hotspot context for adapter runs.
+
+    TWAP cannot use the Psi synthetic profile. When the run has no profile yet,
+    call the TWAP source scanner so the candidate generator receives real
+    source-root/touched-file context rather than hand-authored seed candidates.
+    """
+
+    if read_tsv(run_dir / "profile.tsv") and read_tsv(run_dir / "hotspots.tsv"):
+        return
+    source_root = _source_root(args)
+    script = repo_root() / "scripts" / "twap_profile_hotspots.py"
+    if not script.exists():
+        raise SystemExit(f"TWAP profile generator is missing: {script}")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--source-root",
+            str(source_root),
+            "--run-dir",
+            str(run_dir),
+        ],
+        cwd=str(repo_root()),
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    log_path = run_dir / "logs" / "twap_profile_hotspots.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(result.stdout or "", encoding="utf-8")
+    if result.returncode != 0:
+        raise SystemExit(f"TWAP profile generator failed rc={result.returncode}; see {log_path}")
+
+
 def iteration_step(
     args: argparse.Namespace,
     run_dir: Path,
@@ -1415,15 +1580,21 @@ def iteration_step(
 ) -> tuple[dict[str, Any] | None, str, str, dict[str, list[dict[str, Any]]], dict[str, Any]]:
     """Drive one iteration. Returns (candidate, verdict, stop_reason, lanes, batch_state)."""
 
-    seed_profile_if_missing(run_dir)
+    if is_twap_run(args) and not args.candidate_seed_file:
+        seed_twap_profile_if_missing(args, run_dir)
+    else:
+        seed_profile_if_missing(run_dir)
     control_distribution = refresh_control_distribution(run_dir, host_key)
     retry_ready_targets = quiet_retry_ready_targets(args, run_dir, control_distribution)
     update_heartbeat(run_dir, "generate", "building three-lane candidate queue")
-    lanes = generate_candidates(
-        run_dir,
-        retry_ready_targets=retry_ready_targets,
-        candidate_ledger_path=Path(args.candidate_ledger) if args.candidate_ledger else None,
-    )
+    if args.candidate_seed_file:
+        lanes = load_candidate_seed_file(Path(args.candidate_seed_file))
+    else:
+        lanes = generate_candidates(
+            run_dir,
+            retry_ready_targets=retry_ready_targets,
+            candidate_ledger_path=Path(args.candidate_ledger) if args.candidate_ledger else None,
+        )
     # Persist a snapshot of the lane queue for this iteration.
     iteration_dir = run_dir / "iterations" / f"iter_{iteration:03d}_plan"
     iteration_dir.mkdir(parents=True, exist_ok=True)
@@ -1435,7 +1606,7 @@ def iteration_step(
         cooldown_targets=cooldown_targets,
     )
     if candidate is None:
-        return None, "", "no_targets" if lanes_are_empty(lanes) else "", lanes, {}
+        return None, "", "no_targets", lanes, {}
 
     materialized, patch_meta, patch_reason = materialize_candidate_patch(args, run_dir, candidate, iteration)
     if not materialized:
@@ -1571,6 +1742,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--candidate-workspace", default="", help="Override candidate workspace base path (default: <run-dir>/candidate_workspaces/<id>).")
     parser.add_argument("--reuse-candidate-workspace", action="store_true", help="Skip workspace refresh if it already exists.")
     parser.add_argument("--candidate-ledger", default="", help="Optional JSON ledger of blocked, retry-only, and non-retry Psi candidates/classes.")
+    parser.add_argument("--candidate-seed-file", default="", help="Optional JSON file containing explicit candidate lanes for non-Psi adapters such as TWAP.")
+    parser.add_argument("--control-root", default="", help="Optional control source root for non-Psi batch scripts such as TWAP.")
+    parser.add_argument("--twap-endpoint", default="", help="TWAP gRPC endpoint passed to twap_headless_remote.sh.")
+    parser.add_argument("--twap-user-id", default="", help="TWAP userId passed to twap_headless_remote.sh.")
+    parser.add_argument("--twap-measure-cases", default="", help="TWAP timing cases, e.g. '100:50:120 500:20:180'.")
     return parser
 
 
@@ -1598,6 +1774,10 @@ def main() -> int:
         raise SystemExit("--max-hours must be > 0")
     if args.candidate_ledger:
         args.candidate_ledger = str(Path(args.candidate_ledger).resolve())
+    if args.candidate_seed_file:
+        args.candidate_seed_file = str(Path(args.candidate_seed_file).resolve())
+        if not Path(args.candidate_seed_file).exists():
+            raise SystemExit(f"--candidate-seed-file does not exist: {args.candidate_seed_file}")
 
     run_dir = args.run_dir.resolve()
     ensure_run_dir(run_dir)
@@ -1629,7 +1809,12 @@ def main() -> int:
         noisy_pending_count=0,
     )
 
-    seen_ids: set[str] = set()
+    prior_attempts = read_tsv(run_dir / "attempts.tsv")
+    seen_ids: set[str] = {
+        (row.get("candidate_id") or "").strip()
+        for row in prior_attempts
+        if (row.get("candidate_id") or "").strip()
+    }
     cooldown_targets = {(row.get("target") or "").strip() for row in read_tsv(run_dir / "cooldown.tsv")}
     cooldown_targets.discard("")
     infra_failures = 0
@@ -1641,7 +1826,9 @@ def main() -> int:
     control_distribution: dict[str, Any] = {}
     candidates_tried = 0
 
-    for iteration in range(1, args.max_iterations + 1):
+    start_iteration = len(prior_attempts) + 1
+    end_iteration = start_iteration + args.max_iterations
+    for iteration in range(start_iteration, end_iteration):
         if stop_file.exists():
             stop_reason = "user_stopped"
             stop_detail = f"stop file present: {stop_file}"
