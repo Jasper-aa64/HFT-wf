@@ -1967,7 +1967,25 @@ def iteration_step(
     update_heartbeat(run_dir, "remote_batch", f"running iteration {iteration} candidate {candidate['candidate_id']}")
     rc, _iter_dir, batch_state = call_remote_batch(args, run_dir, candidate, iteration)
     if rc != 0 and not args.dry_run:
-        # Infrastructure failure; the remote script will have written failure_analysis.json.
+        if batch_state:
+            retry_condition = str(batch_state.get("reason") or batch_state.get("timing_status") or f"remote rc={rc}")
+            if batch_state.get("build_status") == "pass" and not batch_state.get("compare_status"):
+                batch_state["compare_status"] = "pass"
+            if not batch_state.get("timing_verdict"):
+                batch_state["timing_verdict"] = "rejected"
+            record_attempt(
+                run_dir,
+                iteration=iteration,
+                candidate=candidate,
+                batch_state=batch_state,
+                verdict="rejected",
+                retry_condition=retry_condition,
+                stop_reason="",
+                notes="remote gate rejected candidate before timing completed",
+            )
+            set_patch_status(run_dir, candidate["candidate_id"], "reverted", note=retry_condition)
+            return candidate, "rejected", "", lanes, batch_state
+        # No remote state was recoverable; treat this as infrastructure.
         set_patch_status(run_dir, candidate["candidate_id"], "failed", note=f"remote rc={rc}")
         return candidate, "rejected", "remote_failed", lanes, batch_state
 
