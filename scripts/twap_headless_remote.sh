@@ -18,6 +18,7 @@ USER_ID="${USER_ID:-dc548fe6083e4523a918aaef1a68b857}"
 JWT_SECRET="${JWT_SECRET:-ssss}"
 RUNTIME_DIR="${RUNTIME_DIR:-/tmp/code2-twap-runtime}"
 MEASURE_CASES="${MEASURE_CASES:-100:50:120 500:20:180 1000:20:240 500:5:240}"
+SUBSCRIBER_COUNTS="${SUBSCRIBER_COUNTS:-1}"
 BUILD_TARGETS="${BUILD_TARGETS:-PsiGrpcServer PsiTraderRunner twap_current_task_runtime_test twap_position_push_perf_test}"
 CANDIDATE_ID="${CANDIDATE_ID:-${PSI_CANDIDATE_ID:-manual_twap_candidate}}"
 TWAP_CORRECTNESS_MODE="${TWAP_CORRECTNESS_MODE:-push_only}"
@@ -316,15 +317,19 @@ run_perf_case() {
   local count="$4"
   local interval="$5"
   local timeout="$6"
+  local subscribers="$7"
   local case_name="${count}_i${interval}"
+  if [ "$subscribers" != "1" ]; then
+    case_name="${case_name}_s${subscribers}"
+  fi
   local tool
   tool="$(tool_path "$root" twap_position_push_perf_test)"
   local out="$RUN_DIR/${role}_${case_name}.log"
   if [ ! -x "$tool" ]; then
     write_failure "${role}_perf_tool_missing:$tool" "pass" "pass" "failed"
   fi
-  log "running perf role=$role case=$case_name"
-  if ! "$tool" --endpoint "$ENDPOINT" --token "$token" --user-id "$USER_ID" --count "$count" --interval-ms "$interval" --timeout-seconds "$timeout" > "$out" 2>&1; then
+  log "running perf role=$role case=$case_name subscribers=$subscribers"
+  if ! "$tool" --endpoint "$ENDPOINT" --token "$token" --user-id "$USER_ID" --count "$count" --interval-ms "$interval" --timeout-seconds "$timeout" --subscriber-count "$subscribers" > "$out" 2>&1; then
     tail -120 "$out" > "$RUN_DIR/${role}_${case_name}_tail.txt" 2>/dev/null || true
     write_failure "${role}_perf_failed:$case_name" "pass" "pass" "failed"
   fi
@@ -341,7 +346,10 @@ run_perf_suite_for_role() {
     IFS=: read -r count interval timeout <<EOF
 $spec
 EOF
-    run_perf_case "$role" "$root" "$token" "$count" "$interval" "$timeout"
+    local subscribers
+    for subscribers in $SUBSCRIBER_COUNTS; do
+      run_perf_case "$role" "$root" "$token" "$count" "$interval" "$timeout" "$subscribers"
+    done
   done
   stop_runner "$root"
 }
@@ -405,8 +413,11 @@ lost_failures = [
     row for row in rows
     if (row.get("lost") or "") not in {"", "0"} or (row.get("status") or "") not in {"", "PASS"}
 ]
-normal_cases = [delta for delta in case_deltas if delta["case"] in {"500_i20", "1000_i20"}]
-stress_cases = [delta for delta in case_deltas if delta["case"] in {"500_i5"}]
+def case_base(case):
+    return str(case).split("_s", 1)[0]
+
+normal_cases = [delta for delta in case_deltas if case_base(delta["case"]) in {"500_i20", "1000_i20"}]
+stress_cases = [delta for delta in case_deltas if case_base(delta["case"]) in {"500_i5"}]
 min_normal_p95_improvement_ms = float(os.environ["MIN_NORMAL_P95_IMPROVEMENT_MS"])
 max_stress_p95_regression_ms = float(os.environ["MAX_STRESS_P95_REGRESSION_MS"])
 max_normal_p95_regression_ms = 1.0

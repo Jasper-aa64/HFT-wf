@@ -1124,6 +1124,8 @@ def call_ssh_remote_batch(
         remote_env["USER_ID"] = str(args.twap_user_id)
     if args.twap_measure_cases:
         remote_env["MEASURE_CASES"] = str(args.twap_measure_cases)
+    if args.twap_subscriber_counts:
+        remote_env["SUBSCRIBER_COUNTS"] = str(args.twap_subscriber_counts)
     if args.twap_build_targets:
         remote_env["BUILD_TARGETS"] = str(args.twap_build_targets)
     if args.twap_correctness_mode:
@@ -1311,9 +1313,10 @@ def _twap_batch_stats(batch_state: dict[str, Any]) -> dict[str, Any]:
         if raw_delta is not None:
             p95_benefit.append(-raw_delta)
             if raw_delta > 0:
-                if case in {"500_i20", "1000_i20"}:
+                case_base = case.split("_s", 1)[0]
+                if case_base in {"500_i20", "1000_i20"}:
                     normal_regressions.append(raw_delta)
-                if case in {"500_i5"}:
+                if case_base in {"500_i5"}:
                     stress_regressions.append(raw_delta)
         rendered.append(f"{case}:{row.get('p95_delta_ms', '')}")
 
@@ -2052,6 +2055,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--twap-endpoint", default="", help="TWAP gRPC endpoint passed to twap_headless_remote.sh.")
     parser.add_argument("--twap-user-id", default="", help="TWAP userId passed to twap_headless_remote.sh.")
     parser.add_argument("--twap-measure-cases", default="", help="TWAP timing cases, e.g. '100:50:120 500:20:180'.")
+    parser.add_argument("--twap-subscriber-counts", default="", help="TWAP subscriber fanout counts passed to twap_headless_remote.sh, e.g. '1 4'.")
     parser.add_argument("--twap-build-targets", default="", help="TWAP build targets passed to twap_headless_remote.sh.")
     parser.add_argument("--twap-correctness-mode", default="", choices=("", "push_only", "skip"), help="TWAP correctness mode passed to twap_headless_remote.sh.")
     return parser

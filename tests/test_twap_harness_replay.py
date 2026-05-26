@@ -216,6 +216,47 @@ class TwapHarnessReplayTests(unittest.TestCase):
         self.assertEqual(verdict, "rejected")
         self.assertEqual(reason, "TWAP push timing lost messages: lost_failure_count=2")
 
+    def test_multi_subscriber_normal_regression_rejects_candidate(self) -> None:
+        batch_state = {
+            "compare_status": "pass",
+            "decision": "screening_only",
+            "reason": "completed",
+            "lost_failure_count": 0,
+            "twap_case_deltas": [
+                {
+                    "case": "500_i20_s4",
+                    "control_p95_ms": "9.0",
+                    "candidate_p95_ms": "13.4",
+                    "p95_delta_ms": 4.4,
+                    "control_lost": "0",
+                    "candidate_lost": "0",
+                }
+            ],
+            "twap_timing_samples": [
+                {
+                    "case": "500_i20_s4",
+                    "role": "control",
+                    "sent": "2000",
+                    "received": "2000",
+                    "lost": "0",
+                    "p95_ms": "9.0",
+                },
+                {
+                    "case": "500_i20_s4",
+                    "role": "candidate",
+                    "sent": "2000",
+                    "received": "2000",
+                    "lost": "0",
+                    "p95_ms": "13.4",
+                },
+            ],
+        }
+
+        verdict, reason = loop.judge_verdict(batch_state)
+
+        self.assertEqual(verdict, "rejected")
+        self.assertEqual(reason, "TWAP normal-frequency p95 regression 4.400ms exceeds 1.000ms")
+
     def test_control_lost_pushes_blocks_as_infra_not_candidate_verdict(self) -> None:
         batch_state = {
             "compare_status": "pass",
