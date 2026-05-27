@@ -431,8 +431,25 @@ lost_failures = [
 def case_base(case):
     return str(case).split("_s", 1)[0]
 
-normal_cases = [delta for delta in case_deltas if case_base(delta["case"]) in {"500_i20", "1000_i20"}]
-stress_cases = [delta for delta in case_deltas if case_base(delta["case"]) in {"500_i5"}]
+def case_interval_ms(case):
+    for part in case_base(case).split("_"):
+        if part.startswith("i"):
+            try:
+                return int(part[1:])
+            except ValueError:
+                return None
+    return None
+
+normal_cases = []
+stress_cases = []
+for delta in case_deltas:
+    interval_ms = case_interval_ms(delta["case"])
+    if interval_ms is None:
+        continue
+    if interval_ms >= 20:
+        normal_cases.append(delta)
+    elif interval_ms <= 5:
+        stress_cases.append(delta)
 min_normal_p95_improvement_ms = float(os.environ["MIN_NORMAL_P95_IMPROVEMENT_MS"])
 max_stress_p95_regression_ms = float(os.environ["MAX_STRESS_P95_REGRESSION_MS"])
 max_normal_p95_regression_ms = 1.0

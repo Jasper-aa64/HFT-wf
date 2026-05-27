@@ -224,7 +224,7 @@ class TwapHarnessReplayTests(unittest.TestCase):
             "lost_failure_count": 0,
             "twap_case_deltas": [
                 {
-                    "case": "500_i20_s4",
+                    "case": "100_i50_s4",
                     "control_p95_ms": "9.0",
                     "candidate_p95_ms": "13.4",
                     "p95_delta_ms": 4.4,
@@ -234,7 +234,7 @@ class TwapHarnessReplayTests(unittest.TestCase):
             ],
             "twap_timing_samples": [
                 {
-                    "case": "500_i20_s4",
+                    "case": "100_i50_s4",
                     "role": "control",
                     "sent": "2000",
                     "received": "2000",
@@ -242,7 +242,7 @@ class TwapHarnessReplayTests(unittest.TestCase):
                     "p95_ms": "9.0",
                 },
                 {
-                    "case": "500_i20_s4",
+                    "case": "100_i50_s4",
                     "role": "candidate",
                     "sent": "2000",
                     "received": "2000",
