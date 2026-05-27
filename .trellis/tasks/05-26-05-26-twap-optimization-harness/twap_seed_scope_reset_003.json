@@ -1,0 +1,69 @@
+{
+  "evidence": [
+    {
+      "candidate_id": "twap_order_status_lookup_key_reuse",
+      "lane": "evidence",
+      "target": "twap.order_status_lookup",
+      "hypothesis": "TWAP repeatedly constructs account/stock cache keys and reads order status during position and order-state paths; narrow key reuse and duplicate-lookup removal may reduce deterministic overhead without changing payload shape.",
+      "expected_effect": "Reduce repeated string construction and cache lookup overhead on TWAP status paths.",
+      "semantic_risk": "low",
+      "touched_files": [
+        "PsiGrpcServer/twap_sale_service.cpp"
+      ],
+      "source_evidence": {
+        "kind": "scope_reset",
+        "notes": "Move away from position-push structural rewrites; only allow local lookup/key construction cleanup."
+      }
+    },
+    {
+      "candidate_id": "twap_order_config_lookup_narrow_cache_path",
+      "lane": "evidence",
+      "target": "twap.order_config_lookup",
+      "hypothesis": "TWAP order config access builds stock/account keys and decodes params on hot paths; a narrow patch can avoid repeated temporary work while preserving config semantics.",
+      "expected_effect": "Reduce local config lookup overhead without changing selected/sellRatio/params behavior.",
+      "semantic_risk": "medium",
+      "touched_files": [
+        "PsiGrpcServer/twap_sale_service.cpp"
+      ],
+      "source_evidence": {
+        "kind": "scope_reset",
+        "notes": "Focus on deterministic repeated lookup work; do not rewrite aggregation or push fanout."
+      }
+    }
+  ],
+  "insight": [
+    {
+      "candidate_id": "twap_subscription_filter_precompute_request_terms",
+      "lane": "insight",
+      "target": "twap.subscription_filter",
+      "hypothesis": "Subscription matching repeatedly parses or scans request search/account filters; precomputing request-local filter terms may reduce fanout scan overhead without changing which subscribers receive messages.",
+      "expected_effect": "Reduce subscription filter overhead while preserving userId/searchStockCode semantics.",
+      "semantic_risk": "medium",
+      "touched_files": [
+        "PsiGrpcServer/twap_sale_service.cpp"
+      ],
+      "source_evidence": {
+        "kind": "scope_reset",
+        "notes": "Allowed only if the patch keeps the same subscriber inclusion/exclusion behavior."
+      }
+    },
+    {
+      "candidate_id": "twap_redis_update_ingest_parse_guard",
+      "lane": "insight",
+      "target": "twap.redis_update_ingest",
+      "hypothesis": "Redis update ingest may do parse or trigger work before rejecting irrelevant or malformed events; a guard-first patch can reduce wasted work without dropping valid events.",
+      "expected_effect": "Reduce ingest overhead for irrelevant updates while preserving event delivery.",
+      "semantic_risk": "high",
+      "touched_files": [
+        "PsiRedis/PsiRedis.cpp",
+        "PsiData/PsiRedisDataMgr.cpp",
+        "PsiGrpcServer/twap_sale_service.cpp"
+      ],
+      "source_evidence": {
+        "kind": "scope_reset",
+        "notes": "High risk: correctness must prove no lost valid update before timing matters."
+      }
+    }
+  ],
+  "combination": []
+}
