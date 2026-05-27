@@ -1300,6 +1300,17 @@ def _twap_batch_stats(batch_state: dict[str, Any]) -> dict[str, Any]:
     control_unknown_push_total = 0
     candidate_unknown_push_total = 0
     rendered: list[str] = []
+
+    def case_interval_ms(case_name: str) -> int | None:
+        case_base = case_name.split("_s", 1)[0]
+        for part in case_base.split("_"):
+            if part.startswith("i"):
+                try:
+                    return int(part[1:])
+                except ValueError:
+                    return None
+        return None
+
     for row in case_deltas:
         if not isinstance(row, dict):
             continue
@@ -1326,10 +1337,10 @@ def _twap_batch_stats(batch_state: dict[str, Any]) -> dict[str, Any]:
         if raw_delta is not None:
             p95_benefit.append(-raw_delta)
             if raw_delta > 0:
-                case_base = case.split("_s", 1)[0]
-                if case_base in {"500_i20", "1000_i20"}:
+                interval_ms = case_interval_ms(case)
+                if interval_ms is not None and interval_ms >= 20:
                     normal_regressions.append(raw_delta)
-                if case_base in {"500_i5"}:
+                if interval_ms is not None and interval_ms <= 5:
                     stress_regressions.append(raw_delta)
         rendered.append(f"{case}:{row.get('p95_delta_ms', '')}")
 
