@@ -22,6 +22,7 @@ SUBSCRIBER_COUNTS="${SUBSCRIBER_COUNTS:-1}"
 BUILD_TARGETS="${BUILD_TARGETS:-PsiGrpcServer PsiTraderRunner twap_current_task_runtime_test twap_position_push_perf_test}"
 CANDIDATE_ID="${CANDIDATE_ID:-${PSI_CANDIDATE_ID:-manual_twap_candidate}}"
 TWAP_CORRECTNESS_MODE="${TWAP_CORRECTNESS_MODE:-push_only}"
+TWAP_ACCOUNT_DESC_CHECK="${TWAP_ACCOUNT_DESC_CHECK:-required}"
 MIN_NORMAL_P95_IMPROVEMENT_MS="${MIN_NORMAL_P95_IMPROVEMENT_MS:-1.0}"
 MAX_STRESS_P95_REGRESSION_MS="${MAX_STRESS_P95_REGRESSION_MS:-5.0}"
 ACTIVE_RUNNER_ROOT=""
@@ -283,7 +284,11 @@ run_correctness() {
     write_failure "correctness_tool_missing:$tool" "pass" "failed" "not_run"
   fi
   log "running TWAP correctness smoke mode=$TWAP_CORRECTNESS_MODE"
-  "$tool" --endpoint "$ENDPOINT" --token "$token" --user-id "$USER_ID" > "$out" 2>&1
+  local account_desc_args=()
+  if [ "$TWAP_ACCOUNT_DESC_CHECK" = "optional" ]; then
+    account_desc_args+=(--allow-empty-account-desc)
+  fi
+  "$tool" --endpoint "$ENDPOINT" --token "$token" --user-id "$USER_ID" "${account_desc_args[@]}" > "$out" 2>&1
   local rc=$?
   if [ "$rc" -ne 0 ] && [ "$TWAP_CORRECTNESS_MODE" != "push_only" ]; then
     tail -160 "$out" > "$RUN_DIR/correctness_tail.txt" 2>/dev/null || true

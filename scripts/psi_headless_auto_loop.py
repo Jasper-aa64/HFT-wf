@@ -1131,6 +1131,8 @@ def call_ssh_remote_batch(
         remote_env["BUILD_TARGETS"] = str(args.twap_build_targets)
     if args.twap_correctness_mode:
         remote_env["TWAP_CORRECTNESS_MODE"] = str(args.twap_correctness_mode)
+    if args.twap_account_desc_check:
+        remote_env["TWAP_ACCOUNT_DESC_CHECK"] = str(args.twap_account_desc_check)
 
     env_prefix = " ".join(f"{key}={_remote_quote(value)}" for key, value in remote_env.items())
     remote_batch_script = args.remote_batch_script or str(args.batch_script)
@@ -2095,6 +2097,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--twap-subscriber-counts", default="", help="TWAP subscriber fanout counts passed to twap_headless_remote.sh, e.g. '1 4'.")
     parser.add_argument("--twap-build-targets", default="", help="TWAP build targets passed to twap_headless_remote.sh.")
     parser.add_argument("--twap-correctness-mode", default="", choices=("", "push_only", "skip"), help="TWAP correctness mode passed to twap_headless_remote.sh.")
+    parser.add_argument("--twap-account-desc-check", default="", choices=("", "required", "optional"), help="TWAP accountDesc correctness strictness passed to twap_headless_remote.sh.")
     return parser
 
 
