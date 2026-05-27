@@ -71,6 +71,29 @@ Current temporary guardrails:
 
 These are provisional until A/A baseline jitter is measured.
 
+## A/A Baseline Jitter
+
+Three baseline-vs-baseline runs were executed on 2026-05-27:
+
+- `twap_aa_baseline_20260527_1025`
+- `twap_aa_baseline_20260527_1035`
+- `twap_aa_baseline_20260527_1045`
+
+Observed P95 deltas:
+
+| run | 100_i50 | 100_i50_s4 | 500_i20 | 500_i20_s4 |
+| --- | ---: | ---: | ---: | ---: |
+| 1025 | -0.38678ms | -1.11199ms | +1.94462ms | +0.44682ms |
+| 1035 | +0.29963ms | -6.65964ms | -1.96492ms | +34.45571ms |
+| 1045 | +2.80437ms | +1.24477ms | +0.50474ms | +1.24298ms |
+
+Implication:
+
+- a single-run `1ms` P95 regression threshold is too tight for acceptance decisions on this host
+- P95 is still valuable as a tail-latency warning signal
+- accepted candidates should require repeated paired runs or a quiet-window validation
+- large regressions like `40ms+` remain meaningful, but small `1-3ms` deltas need A/A context
+
 ## Next Scope
 
 Move from `position_push` to TWAP global hot-path discovery.
@@ -91,4 +114,3 @@ Rules for the next candidate batch:
 - prefer deterministic waste: repeated lookup, repeated key construction, unnecessary sort/pass, lock-scope cleanup
 - do not cache or reuse payload across users/accounts/subscriptions unless user-independence is proven
 - do not promote any Code2 patch automatically
-
