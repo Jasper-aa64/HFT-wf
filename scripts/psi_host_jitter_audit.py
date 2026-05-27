@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import host_weather_audit
+import perf_validation_lock
 
 
 def utc_stamp() -> str:
@@ -280,6 +281,60 @@ def run_audit(args: argparse.Namespace) -> dict[str, Any]:
             remote_artifacts_dir=None,
         )
         summary["promotion_gate"] = "blocked_by_preflight_runner"
+        write_json(run_dir / "psi_host_jitter_audit_summary.json", summary)
+        return summary
+
+    # Check remote validation lock before starting timing.
+    lock_check = perf_validation_lock.check_lock_ssh(
+        args.remote_host,
+        lock_path=perf_validation_lock.DEFAULT_LOCK_PATH,
+        timeout=args.remote_timeout_seconds,
+    )
+    if lock_check.get("held"):
+        lock_data = lock_check.get("lock_data") or {}
+        holder = lock_data.get("run_id", "unknown")
+        snapshots = host_weather_audit.collect_remote_snapshots(
+            remote_host=args.remote_host,
+            sample_count=args.weather_sample_count,
+            interval_seconds=args.weather_sample_interval_seconds,
+            process_names=args.process_name or host_weather_audit.DEFAULT_PROCESS_NAMES,
+            timeout_seconds=args.remote_timeout_seconds,
+        )
+        weather_summary = host_weather_audit.classify_weather(
+            snapshots,
+            control_samples_ms=[],
+            paired_deltas_ms=[],
+        )
+        weather_readiness = host_weather_audit.build_readiness(
+            snapshots,
+            weather_summary,
+            host_key=args.host_key,
+            remote_host=args.remote_host,
+        )
+        host_weather_audit.write_json(run_dir / "host_readiness.json", weather_readiness)
+        host_weather_audit.write_tsv(run_dir / "host_jitter_samples.tsv", snapshots, host_weather_audit.SNAPSHOT_FIELDS)
+        host_weather_audit.write_json(run_dir / "host_jitter_summary.json", weather_summary)
+        summary = build_summary(
+            args=args,
+            run_dir=run_dir,
+            remote_run_dir=remote_run_dir,
+            remote_result=None,
+            control_samples=[],
+            paired_deltas=[],
+            weather_summary=weather_summary,
+            weather_readiness=weather_readiness,
+            preflight_blocking=[],
+            remote_artifacts_dir=None,
+        )
+        summary["promotion_gate"] = "infra_blocked_by_validation_lock"
+        summary["weather_reasons"] = list(summary.get("weather_reasons") or []) + [
+            f"remote_validation_lock_held_by:{holder}"
+        ]
+        summary["notes"] = (
+            summary.get("notes", "")
+            + f" Validation lock held by another run: {holder}. "
+            + "Do not start timing until the lock is released."
+        )
         write_json(run_dir / "psi_host_jitter_audit_summary.json", summary)
         return summary
 

@@ -49,6 +49,37 @@ sync_log_artifacts() {
   done
 }
 
+acquire_validation_lock() {
+  local lock_result
+  lock_result=$(python3 "$SCRIPT_DIR/perf_validation_lock.py" acquire \
+    --lock-path /root/work/.perf_validation.lock \
+    --run-id "$RUN_ID" \
+    --script-name "psi_headless_remote.sh" \
+    --candidate-id "${CANDIDATE_ID:-}" \
+    --owner-command "${OWNER_COMMAND:-bash scripts/psi_headless_remote.sh}" 2>&1) || true
+  echo "$lock_result" | tee -a "$RUN_DIR/validation_lock_acquire.json"
+  if echo "$lock_result" | grep -q '"acquired": true'; then
+    log "validation lock acquired run_id=$RUN_ID"
+    echo "$lock_result" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('acquired') else 1)" 2>/dev/null
+    return 0
+  fi
+  log "ERROR validation lock not acquired; another run may be active"
+  return 1
+}
+
+release_validation_lock() {
+  local lock_result
+  lock_result=$(python3 "$SCRIPT_DIR/perf_validation_lock.py" release \
+    --lock-path /root/work/.perf_validation.lock \
+    --run-id "$RUN_ID" 2>&1) || true
+  echo "$lock_result" | tee -a "$RUN_DIR/validation_lock_release.json"
+  if echo "$lock_result" | grep -q '"released": true'; then
+    log "validation lock released run_id=$RUN_ID"
+  else
+    log "WARN validation lock release result: $lock_result"
+  fi
+}
+
 count_runner_failure_markers() {
   # PsiRunner can return rc=0 even when benchmark input/compare files are missing.
   # Treat those log markers as hard gate failures before timing is interpreted.
@@ -1247,6 +1278,13 @@ if pgrep -x "$RUNNER_PROCESS_NAME" >/dev/null 2>&1; then
   sync_log_artifacts
   exit 1
 fi
+
+if ! acquire_validation_lock; then
+  write_failure_state "validation_lock_blocked" "not_run" "not_run" "not_run"
+  sync_log_artifacts
+  exit 1
+fi
+trap 'release_validation_lock' EXIT
 
 stage_runtime_config
 set_compare false

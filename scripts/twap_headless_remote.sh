@@ -26,6 +26,7 @@ TWAP_ACCOUNT_DESC_CHECK="${TWAP_ACCOUNT_DESC_CHECK:-required}"
 MIN_NORMAL_P95_IMPROVEMENT_MS="${MIN_NORMAL_P95_IMPROVEMENT_MS:-1.0}"
 MAX_STRESS_P95_REGRESSION_MS="${MAX_STRESS_P95_REGRESSION_MS:-5.0}"
 ACTIVE_RUNNER_ROOT=""
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 mkdir -p "$RUN_DIR" "$RUN_DIR/logs"
 : > "$RUN_DIR/timing_samples.tsv"
@@ -34,6 +35,37 @@ printf "case\trole\tcount\tinterval_ms\ttimeout_seconds\tpublishes\tsubscribers\
 
 log() {
   echo "[$(date '+%F %T')] $*" | tee -a "$RUN_DIR/summary.txt"
+}
+
+acquire_validation_lock() {
+  local lock_result
+  lock_result=$(python3 "$SCRIPT_DIR/perf_validation_lock.py" acquire \
+    --lock-path /root/work/.perf_validation.lock \
+    --run-id "$RUN_ID" \
+    --script-name "twap_headless_remote.sh" \
+    --candidate-id "${CANDIDATE_ID:-}" \
+    --owner-command "${OWNER_COMMAND:-bash scripts/twap_headless_remote.sh}" 2>&1) || true
+  echo "$lock_result" | tee -a "$RUN_DIR/validation_lock_acquire.json"
+  if echo "$lock_result" | grep -q '"acquired": true'; then
+    log "validation lock acquired run_id=$RUN_ID"
+    echo "$lock_result" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('acquired') else 1)" 2>/dev/null
+    return 0
+  fi
+  log "ERROR validation lock not acquired; another run may be active"
+  return 1
+}
+
+release_validation_lock() {
+  local lock_result
+  lock_result=$(python3 "$SCRIPT_DIR/perf_validation_lock.py" release \
+    --lock-path /root/work/.perf_validation.lock \
+    --run-id "$RUN_ID" 2>&1) || true
+  echo "$lock_result" | tee -a "$RUN_DIR/validation_lock_release.json"
+  if echo "$lock_result" | grep -q '"released": true'; then
+    log "validation lock released run_id=$RUN_ID"
+  else
+    log "WARN validation lock release result: $lock_result"
+  fi
 }
 
 json_escape() {
@@ -512,6 +544,12 @@ PY
 
 main() {
   log "TWAP headless remote start root=$ROOT control_root=$CONTROL_ROOT run_dir=$RUN_DIR"
+
+  if ! acquire_validation_lock; then
+    write_failure "validation_lock_blocked" "not_run" "not_run" "not_run"
+  fi
+  trap 'release_validation_lock' EXIT
+
   local token
   token="$(make_token)"
 
