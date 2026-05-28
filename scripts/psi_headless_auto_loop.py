@@ -1038,6 +1038,7 @@ def call_remote_batch(
             "HEADLESS_CONTROL_DIR": str(iteration_dir),
             "GENERATE_REPORT": "0",
             "MEASURE_RUNS": str(args.measure_runs),
+            "NO_COMPARE_RUNS": str(args.no_compare_runs),
             "CANDIDATE_ID": candidate["candidate_id"],
             "CANDIDATE_LANE": candidate["lane"],
             "CANDIDATE_TARGET": candidate["target"],
@@ -1122,6 +1123,7 @@ def call_ssh_remote_batch(
         "HEADLESS_CONTROL_DIR": remote_iter_dir,
         "GENERATE_REPORT": "0",
         "MEASURE_RUNS": str(args.measure_runs),
+        "NO_COMPARE_RUNS": str(args.no_compare_runs),
         "CANDIDATE_ID": candidate["candidate_id"],
         "CANDIDATE_LANE": candidate["lane"],
         "CANDIDATE_TARGET": candidate["target"],
@@ -2138,6 +2140,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-hours", type=float, default=8.0)
     parser.add_argument("--max-candidates", type=int, default=12)
     parser.add_argument("--measure-runs", type=int, default=5)
+    parser.add_argument(
+        "--no-compare-runs",
+        type=int,
+        default=0,
+        help="Measured no_compare smoke runs before compare; 0 preserves legacy behavior by using --measure-runs.",
+    )
     parser.add_argument("--first-accepted-stop", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--repeated-infra-failures", type=int, default=2)
     parser.add_argument("--stack-throttle", type=int, default=3, help="Try a neutral stack at most every N iterations")
@@ -2204,6 +2212,8 @@ def main() -> int:
         raise SystemExit("--max-iterations must be >= 1")
     if args.max_hours <= 0:
         raise SystemExit("--max-hours must be > 0")
+    if args.no_compare_runs <= 0:
+        args.no_compare_runs = args.measure_runs
     if args.candidate_ledger:
         args.candidate_ledger = str(Path(args.candidate_ledger).resolve())
     if args.candidate_seed_file:

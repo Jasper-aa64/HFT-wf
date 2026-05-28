@@ -15,6 +15,7 @@ REPORT_ROOT="${REPORT_ROOT:-$RUN_DIR/reports}"
 GENERATE_REPORT="${GENERATE_REPORT:-0}"
 HEADLESS_CONTROL_DIR="$RUN_DIR"
 MEASURE_RUNS="${MEASURE_RUNS:-5}"
+NO_COMPARE_RUNS="${NO_COMPARE_RUNS:-$MEASURE_RUNS}"
 CANDIDATE_RUNNER="${CANDIDATE_RUNNER:-}"
 
 mkdir -p "$RUN_DIR"
@@ -1338,7 +1339,7 @@ log "running current-safe no_compare"
 set_compare false
 : > "$RUN_DIR/current_no_compare.txt"
 measured_labels=()
-for index in $(seq 1 "$MEASURE_RUNS"); do
+for index in $(seq 1 "$NO_COMPARE_RUNS"); do
   measured_labels+=("run$index")
 done
 for label in warmup "${measured_labels[@]}"; do
@@ -1513,12 +1514,15 @@ fi
   echo
   cat "$RUN_DIR/current_compare.txt"
   echo
+  echo "no_compare measured runs: $NO_COMPARE_RUNS"
+  echo "paired measured runs: $MEASURE_RUNS"
+  echo
   echo "Headless control loop artifacts:"
   echo "$HEADLESS_CONTROL_DIR"
   echo
   echo "Hold for review:"
   echo "skip_tick_strings measured around 55s but is semantically risky for factors that read tick thscode/exchange."
-  echo "1 warmup + $MEASURE_RUNS measured is screening only; use evaluator or bundle audit for promotion evidence."
+  echo "1 warmup + $NO_COMPARE_RUNS no_compare measured is screening only; paired A/B uses $MEASURE_RUNS measured pairs."
   echo
   echo "Next target selection should use perf_report.txt if it contains useful symbols."
   echo "Do not retry generateTable without a narrower profiler-backed hypothesis."
