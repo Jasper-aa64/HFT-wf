@@ -765,6 +765,8 @@ if (
         build_pass=True,
         compare_pass=compare_pass,
         verdict_context=run_id,
+        replicated=os.environ.get("CANDIDATE_REPLICATED", "").strip() == "1",
+        change_class=os.environ.get("CHANGE_CLASS", "class_b").strip() or "class_b",
     )
     paired_evidence_status = "present"
 
@@ -804,7 +806,7 @@ attempt_rows = build_attempts(
     paired_evidence_by_target=paired_evidence_by_target or None,
 )
 if paired_evidence is not None and not paired_evidence_by_target:
-    paired_fields = evidence_fields(paired_evidence)
+    paired_fields = evidence_fields(paired_evidence, replicated=os.environ.get("CANDIDATE_REPLICATED", "").strip() == "1", change_class=os.environ.get("CHANGE_CLASS", "class_b").strip() or "class_b")
     target = os.environ.get("CANDIDATE_TARGET", "").strip() or "candidate_runner"
     candidate_id = os.environ.get("CANDIDATE_ID", "").strip() or "candidate_runner"
     lane = os.environ.get("CANDIDATE_LANE", "").strip() or "screening"
@@ -1048,9 +1050,10 @@ history_rows = history_rows_from_attempt_rows(
 )
 write_history_artifacts(shared_history_out, per_run_history_out, history_rows)
 comparison_summary_path = out_dir / "comparison_summary.json"
-accepted_attempt_rows = [row for row in attempt_rows if row.get("verdict") == "accepted"]
+promotion_verdicts = {"accepted", "accepted_class_a", "accepted_noisy_replicated"}
+accepted_attempt_rows = [row for row in attempt_rows if row.get("verdict") in promotion_verdicts]
 candidate_history_rows = [row for row in history_rows if row.get("kind") != "control"]
-accepted_history_rows = [row for row in candidate_history_rows if row.get("verdict") == "accepted"]
+accepted_history_rows = [row for row in candidate_history_rows if row.get("verdict") in promotion_verdicts]
 comparison_candidate_stats = merged_history_stats(accepted_history_rows, control_stats["noise_flag"]) if accepted_history_rows else {}
 comparison_updated_baseline_stats = comparison_candidate_stats if accepted_history_rows else {}
 patch_manifest = write_patch_manifest(out_dir, Path(os.environ["ROOT"]), patch_queue_rows)
@@ -1062,7 +1065,7 @@ paired_block: dict[str, object] = {}
 paired_samples_block: list[dict[str, object]] = []
 paired_fields: dict[str, str] = {}
 if paired_evidence is not None:
-    paired_fields = evidence_fields(paired_evidence)
+    paired_fields = evidence_fields(paired_evidence, replicated=os.environ.get("CANDIDATE_REPLICATED", "").strip() == "1", change_class=os.environ.get("CHANGE_CLASS", "class_b").strip() or "class_b")
     for idx, pair_index in enumerate(_paired_pair_indexes):
         control_ms = _paired_control_values[idx]
         candidate_ms = _paired_candidate_values[idx]
@@ -1148,11 +1151,16 @@ if paired_evidence is not None:
     comparison_summary["permutation_p_value"] = paired_fields.get("permutation_p_value", "")
     comparison_summary["paired_samples"] = paired_samples_block
     comparison_summary["paired"] = paired_block
-    paired_accepted = paired_evidence.verdict == "accepted" and compare_pass
-    comparison_summary["decision"] = paired_evidence.verdict if paired_accepted else (
+    paired_accepted = paired_evidence.verdict in promotion_verdicts and compare_pass
+    paired_accepted_noisy_single = paired_evidence.verdict == "accepted_noisy_single" and compare_pass
+    comparison_summary["decision"] = paired_evidence.verdict if (paired_accepted or paired_accepted_noisy_single) else (
         "accepted" if accepted_attempt_rows else paired_evidence.verdict
     )
     comparison_summary["accepted"] = bool(paired_accepted)
+    if paired_accepted_noisy_single:
+        comparison_summary["evidence_tier"] = "single_run_noisy"
+    elif paired_accepted and paired_evidence.verdict == "accepted_noisy_replicated":
+        comparison_summary["evidence_tier"] = "shared_host_replicated"
 else:
     comparison_summary["decision"] = "needs_paired_evidence" if paired_evidence_status == "missing" else "screening_only"
     comparison_summary["paired_sample_count"] = 0
@@ -1173,7 +1181,7 @@ if comparison_accepted:
     run_state_timing_status = "accepted"
 elif paired_evidence_status == "missing":
     run_state_timing_status = "needs_paired_evidence"
-elif comparison_timing_verdict and comparison_timing_verdict != "accepted":
+elif comparison_timing_verdict and comparison_timing_verdict not in ("accepted", "accepted_noisy_replicated"):
     run_state_timing_status = comparison_timing_verdict
 else:
     run_state_timing_status = "screening_only"

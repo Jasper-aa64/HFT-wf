@@ -207,6 +207,8 @@ def summarize_paired_timing(
     *,
     build_pass: bool = True,
     compare_pass: bool = True,
+    change_class: str = "class_b",
+    replicated: bool = False,
     required_pairs: int = DEFAULT_PROMOTION_SAMPLE_FLOOR,
     bootstrap_resamples: int = DEFAULT_BOOTSTRAP_RESAMPLES,
     permutation_resamples: int = DEFAULT_PERMUTATION_RESAMPLES,
@@ -271,6 +273,9 @@ def summarize_paired_timing(
     elif not compare_pass:
         verdict = "rejected"
         reason = "compare failed; the paired timing evidence is invalid."
+    elif change_class == "class_a" and build_pass and compare_pass:
+        verdict = "accepted_class_a"
+        reason = "Class A algorithmic change: correctness pass is sufficient; perf recorded but not gated."
     elif clear_non_improvement:
         verdict = "rejected"
         reason = (
@@ -278,12 +283,6 @@ def summarize_paired_timing(
             f"control median {control_median_ms:.3f}ms with bootstrap CI "
             f"[{_format_optional_ms(bootstrap_low_ms)}, {_format_optional_ms(bootstrap_high_ms)}]ms "
             f"and permutation p={p_value:.6f}."
-        )
-    elif noise_flag == "NOISY":
-        verdict = "NOISY_PENDING"
-        reason = (
-            f"paired jitter is noisy against control median {control_median_ms:.3f}ms; "
-            f"range={_format_optional_ms(paired_range_ms)}ms, stdev={_format_optional_ms(paired_stdev_ms)}ms."
         )
     elif pair_count < required_pairs:
         verdict = "neutral"
@@ -298,11 +297,45 @@ def summarize_paired_timing(
         and bootstrap_low_ms > 0.0
         and p_value is not None
         and p_value <= 0.05
+        and noise_flag != "NOISY"
     ):
         verdict = "accepted"
         reason = (
             f"paired median delta={median_delta_ms:.3f}ms against control median {control_median_ms:.3f}ms "
             f"with bootstrap CI [{bootstrap_low_ms:.3f}, {bootstrap_high_ms:.3f}]ms and permutation p={p_value:.6f}."
+        )
+    elif (
+        bootstrap_low_ms is not None
+        and bootstrap_low_ms > 0.0
+        and p_value is not None
+        and p_value <= 0.05
+        and noise_flag == "NOISY"
+    ):
+        if replicated:
+            verdict = "accepted_noisy_replicated"
+            reason = (
+                f"paired median delta={median_delta_ms:.3f}ms against control median {control_median_ms:.3f}ms "
+                f"is statistically conclusive (bootstrap CI [{bootstrap_low_ms:.3f}, {bootstrap_high_ms:.3f}]ms, "
+                f"permutation p={p_value:.6f}) with replicated evidence across multiple locked independent runs; "
+                f"measurement environment was noisy (range={_format_optional_ms(paired_range_ms)}ms, "
+                f"stdev={_format_optional_ms(paired_stdev_ms)}ms) but replication supports shared-host promotion; "
+                f"artifact marked non-bare-metal."
+            )
+        else:
+            verdict = "accepted_noisy_single"
+            reason = (
+                f"paired median delta={median_delta_ms:.3f}ms against control median {control_median_ms:.3f}ms "
+                f"is statistically conclusive (bootstrap CI [{bootstrap_low_ms:.3f}, {bootstrap_high_ms:.3f}]ms, "
+                f"permutation p={p_value:.6f}) but the measurement environment was noisy "
+                f"(range={_format_optional_ms(paired_range_ms)}ms, stdev={_format_optional_ms(paired_stdev_ms)}ms); "
+                f"accepted as evidence only — NOT applied; queued for validation replication."
+            )
+    elif noise_flag == "NOISY":
+        verdict = "NOISY_PENDING"
+        reason = (
+            f"paired jitter is noisy against control median {control_median_ms:.3f}ms "
+            f"and the statistical evidence is not yet conclusive; "
+            f"range={_format_optional_ms(paired_range_ms)}ms, stdev={_format_optional_ms(paired_stdev_ms)}ms."
         )
     else:
         verdict = "neutral"
@@ -335,8 +368,10 @@ def summarize_paired_timing(
     )
 
 
-def evidence_fields(evidence: PairedTimingEvidence) -> dict[str, str]:
+def evidence_fields(evidence: PairedTimingEvidence, *, change_class: str = "class_b", replicated: bool = False) -> dict[str, str]:
     return {
+        "change_class": change_class,
+        "replicated": "true" if replicated else "false",
         "timing_verdict": evidence.verdict,
         "timing_verdict_reason": evidence.reason,
         "timing_verdict_method": evidence.verdict_method,
@@ -365,3 +400,80 @@ def evidence_fields(evidence: PairedTimingEvidence) -> dict[str, str]:
         "paired_mean_ms": _format_optional_ms(evidence.paired_mean_ms),
         "noise_flag": evidence.noise_flag,
     }
+
+
+def validate_class_a(
+    *,
+    hypothesis: str = "",
+    change_notes: str = "",
+    touched_files: list[str] | None = None,
+    candidate_id: str = "",
+) -> tuple[bool, str]:
+    """Hard whitelist for Class A validation.
+
+    Returns (is_valid, reason).  The caller should force class_b when this
+    function returns ``False`` regardless of what was originally specified.
+
+    At least one *allowed* pattern must be present, and none of the
+    *forbidden* patterns may appear.
+    """
+    combined = (
+        hypothesis
+        + " "
+        + change_notes
+        + " "
+        + " ".join(touched_files or [])
+        + " "
+        + candidate_id
+    ).lower()
+
+    # -- allowed patterns (at least one must match) --
+    allowed = [
+        "dead store",
+        "unused assignment",
+        "removes dead",
+        "unused parameter",
+        "unused temporary",
+        "replace copy with existing",
+        "replace with existing",
+        "already computed",
+        "already done elsewhere",
+        "redundant computation",
+        "eliminates unused",
+        "removes unused",
+        "pure removal",
+    ]
+
+    # -- forbidden patterns (NONE must match) --
+    forbidden = [
+        "new cache",
+        "thread_local",
+        "static local",
+        "new branch",
+        "new conditional",
+        "adds branch",
+        "new state variable",
+        "new state",
+        "container type",
+        "replace type",
+        "swap container",
+        "aggregation reorder",
+        "path reorder",
+        "multi-user",
+        "subscriber payload reuse",
+    ]
+
+    has_allowed = any(pattern in combined for pattern in allowed)
+    matched_forbidden = [pattern for pattern in forbidden if pattern in combined]
+
+    if matched_forbidden:
+        return False, (
+            "Class A rejected: forbidden pattern(s) found: "
+            + ", ".join(matched_forbidden)
+        )
+    if not has_allowed:
+        return False, (
+            "Class A rejected: no allowed pattern matched; "
+            + "change is not a pure dead-store / unused-value removal"
+        )
+    return True, "valid Class A: allowed pattern matched, no forbidden patterns found"

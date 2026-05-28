@@ -105,12 +105,16 @@ Automatic accepted requires all of:
 
 - build pass;
 - correctness / compare pass;
-- clean timing verdict;
+- clean timing verdict OR accepted_noisy_replicated (multi-run replicated evidence);
 - quiet host-weather decision;
 - no active blocking runner;
 - no mid-run contamination;
 - accepted class allowed by policy;
 - risk review complete when the patch changes shared hot-path semantics.
+
+accepted_noisy_single (single-run noisy evidence) is NOT automatic accepted --
+the patch is reverted and the candidate is queued for validation through
+separate replication runs.
 
 The accepted threshold must not be relaxed to make optimization look better.
 True optimizations should become easier to accept because the measurement
@@ -122,9 +126,13 @@ When a patch is truly useful but measured under a bad host window, the harness
 should preserve it instead of rejecting it:
 
 ```text
-build pass + compare pass + strong positive + noisy host
-  -> PROMOTION_CANDIDATE_UNDER_NOISY_HOST
-  -> quiet-window / locked promotion review
+build pass + compare pass + strong positive + noisy host + single run
+  -> accepted_noisy_single
+  -> patch reverted, candidate queued for validation replication
+
+build pass + compare pass + strong positive + noisy host + replicated evidence
+  -> accepted_noisy_replicated
+  -> patch applied, shared-host promotion, artifact marked non-bare-metal
 ```
 
 When the measurement itself is too unstable, classify the run as measurement
@@ -146,7 +154,8 @@ high relative range OR mid-run contamination
 | host audit not quiet before promotion | `blocked_by_host_weather` | no | wait for clean host |
 | validation lock held by another run | `infra_blocked_by_validation_lock` | no | do not start timing |
 | active runner appears mid-run | `UNSTABLE_MEASUREMENT` / invalid run | no | rerun only under lock |
-| median positive but `noise_flag=NOISY` | `PROMOTION_CANDIDATE_UNDER_NOISY_HOST` when strong enough | no | quiet-window promotion review |
+| median positive but `noise_flag=NOISY`, single run | `accepted_noisy_single` when statistically conclusive | no | queued for validation replication |
+| median positive but `noise_flag=NOISY`, replicated evidence | `accepted_noisy_replicated` when statistically conclusive | yes (shared-host, non-bare-metal) | promoted with caveat |
 | paired/control relative range too high | `UNSTABLE_MEASUREMENT` | no | measurement pipeline issue |
 | clean positive timing with all gates pass | `accepted_candidate` | yes | manual risk review if required |
 
@@ -252,3 +261,97 @@ optimizations while preventing noisy measurements from updating baseline.
   pipeline, not accepted blindly or solved only by adding samples.
 - Performance Roulette: noisy system measurements can corrupt automatic
   optimization decisions.
+
+---
+
+## Design Decision: Two-Class Gate Policy (Class A / Class B)
+
+**Context**: A fixed-threshold perf gate (e.g. `improve >= 5s`) biases heavily
+toward false rejects when the noise floor is comparable to the expected gain.
+Small real wins become statistically indistinguishable from zero, and the
+workflow stalls once individual gains drop below the threshold.
+
+**Decision**: Split candidates into two classes with different gate contracts.
+
+### Class A -- Algorithmic Certainty
+
+**Definition**: The change is a logical refactor with no plausible regression
+mechanism.
+
+Criteria (all must be true):
+- no new state visible to callers
+- no new cache or branching layout that callers depend on
+- no new memory allocation pattern in the hot path
+
+Examples:
+- inner-scan O(n^2) replaced by O(n) running variable
+- removal of redundant computation already done elsewhere
+- using a value already in the right type instead of constructing a copy
+
+Counterexample:
+- A `thread_local` per-second cache introduces TLS access cost and a per-call
+  branch and is NOT Class A.
+
+**Gate for Class A**:
+```text
+correctness:  required (compare pass on all output files)
+perf:         recorded but not gated
+verdict:      accepted_class_a when build_pass and compare_pass are both true
+```
+
+### Class B -- Empirical Change (default)
+
+**Definition**: Anything not in Class A. New state, new data layout, swapped
+containers, new threading, or any change where reasoning alone cannot rule out a
+regression.
+
+**Gate for Class B**:
+```text
+correctness:  required
+perf:         bootstrap CI + permutation p-value; accept when candidate
+              median < control median and statistical evidence is conclusive
+              (p <= 0.05, bootstrap CI lower bound > 0)
+```
+
+### Classification Rules
+
+- When in doubt, use Class B.
+- Classification mistakes (Class B tagged as Class A) are only caught by the
+  bundle check. Be conservative.
+- Class A is appropriate for pure removal of unused assignments, proven-
+  correct algorithmic replacements (same semantics, lower complexity), and
+  mechanical cleanups that eliminate dead stores or dead branches.
+
+### Updated Verdict Matrix
+
+| verdict | meaning | patch status | allowed by | triggers first-accepted-stop |
+|---|---|---|---|---|
+| `accepted` | Class B candidate with conclusive perf improvement | applied | Class B | yes |
+| `accepted_class_a` | Class A candidate with correctness pass only | applied | Class A | yes |
+| `accepted_noisy_single` | Statistically conclusive + noisy, single-run evidence only | reverted (queued for validation) | Class B | no |
+| `accepted_noisy_replicated` | Statistically conclusive + noisy, replicated evidence across multiple locked independent runs | applied (shared-host promotion, artifact marked non-bare-metal) | Class B | yes |
+| `NOISY_PENDING` | inconclusive due to measurement noise | reverted, retry later | -- | -- |
+| `neutral` | positive but not credible enough for acceptance | reverted | -- | -- |
+| `rejected` | compare fail, perf non-improvement, or TWAP regression | reverted | -- | -- |
+| `infra_blocked` | control baseline unhealthy | reverted | -- | -- |
+
+### Three-Tier Acceptance Policy
+
+The harness uses a three-tier policy for noisy evidence:
+
+1. **accepted_clean** -- quiet + statistically conclusive -> normal promotion (patch applied)
+2. **accepted_noisy_single** -- single-run noisy but strong signal -> accepted as evidence only, NOT applied, enters validation queue; patch status set to reverted
+3. **accepted_noisy_replicated** -- multiple locked independent runs all strong -> shared-host promotion, artifact marked non-bare-metal; patch status set to applied
+
+**Key rule**: single noisy is NOT clean accepted. It is evidence recorded for later validation. Only replicated noisy may be promoted. The `first_accepted_stop` trigger fires on clean, replicated, and class_a verdicts, but NOT on single noisy.
+
+### Bundle Verification
+
+After every N accepted Class A changes, or before merging an experiment branch:
+- 7 measured wall-clock samples
+- compare to `original_baseline.txt` (snapshotted at branch start)
+- branch-level rebaseline audit: flag if the 7-sample median fails the
+  original improvement target
+
+This is a branch-level safety net for cumulative drift after accepted Class A
+changes. N = 5 is a reasonable starting value.

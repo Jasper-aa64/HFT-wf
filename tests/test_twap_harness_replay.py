@@ -422,7 +422,7 @@ class TwapHarnessReplayTests(unittest.TestCase):
             self.assertEqual(attempts[0]["verdict"], "infra_blocked")
             self.assertEqual(attempts[0]["timing_verdict"], "infra_blocked")
             self.assertEqual(attempts[0]["stop_reason"], "control_baseline_unhealthy")
-            self.assertEqual(loop.count_verdict_rows(run_dir), (0, 0, 0, 0, 1))
+            self.assertEqual(loop.count_verdict_rows(run_dir), (0, 0, 0, 0, 1, 0, 0, 0))
 
             history = read_tsv(run_dir / "timing_history.tsv")
             candidate_rows = [row for row in history if row["kind"] == "candidate"]

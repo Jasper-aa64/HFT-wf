@@ -51,6 +51,8 @@ ATTEMPTS_FIELDNAMES: list[str] = [
     "range_seconds",
     "delta_ms",
     "delta_seconds",
+    "change_class",
+    "replicated",
     "timing_verdict",
     "timing_verdict_reason",
     "timing_verdict_method",

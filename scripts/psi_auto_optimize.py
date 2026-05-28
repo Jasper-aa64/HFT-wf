@@ -202,7 +202,9 @@ def classify_stop(
         )
         for attempt in attempts
     }
-    relevant = [attempt for attempt in attempts if evidence_by_rank[attempt.rank].verdict in {"accepted", "neutral", "rejected", "NOISY_PENDING"}]
+    promotion_verdicts = {"accepted", "accepted_class_a", "accepted_noisy_replicated"}
+    relevant_verdicts = promotion_verdicts | {"accepted_noisy_single", "neutral", "rejected", "NOISY_PENDING"}
+    relevant = [attempt for attempt in attempts if evidence_by_rank[attempt.rank].verdict in relevant_verdicts]
     judged_attempts: list[Attempt] = []
     noisy_candidate_count = 0
     for attempt in relevant:
@@ -222,7 +224,7 @@ def classify_stop(
     ucb95 = ucb95_expected_delta(deltas)
     consecutive_no_accepted = 0
     for attempt in reversed(judged_attempts):
-        if evidence_by_rank[attempt.rank].verdict == "accepted":
+        if evidence_by_rank[attempt.rank].verdict in promotion_verdicts:
             break
         consecutive_no_accepted += 1
 
@@ -460,6 +462,8 @@ def write_attempts(run_dir: Path, attempts: list[Attempt], control_head: str) ->
         evidence = attempt_timing_evidence(attempt, required_pairs)
         timing_fields = evidence_fields(evidence)
         noisy = evidence.verdict == "NOISY_PENDING"
+        accepted_noisy_single = evidence.verdict == "accepted_noisy_single"
+        accepted_noisy_replicated = evidence.verdict == "accepted_noisy_replicated"
         compare_result = "pass" if attempt.correctness == "pass" else "failed"
         candidate_id = f"{attempt.rank:02d}_{safe_token(attempt.target)}"
         patch_path = f"patches/{attempt.rank:02d}_{safe_token(attempt.lane)}.patch"
@@ -488,7 +492,19 @@ def write_attempts(run_dir: Path, attempts: list[Attempt], control_head: str) ->
             ),
             "semantic_risk": "low" if attempt.verdict != "rejected" else "medium",
             "stack_compatibility": "stackable" if attempt.lane == "combination" else "single",
-            "retry_condition": "rerun when interleaved paired jitter is below threshold" if noisy else "bundle audit required" if attempt.lane == "combination" else "eligible for stronger paired evidence run",
+            "retry_condition": (
+                "accepted under Class A; perf recorded, not gated"
+                if evidence.verdict == "accepted_class_a"
+                else "accepted_noisy_replicated: shared-host promotion with non-bare-metal artifact"
+                if accepted_noisy_replicated
+                else "accepted_noisy_single: queued for validation replication"
+                if accepted_noisy_single
+                else "rerun when interleaved paired jitter is below threshold"
+                if noisy
+                else "bundle audit required"
+                if attempt.lane == "combination"
+                else "eligible for stronger paired evidence run"
+            ),
             "sample_unit": "seconds_compat",
             "warm_or_cold": "measured",
             "samples_ms": stats["samples_ms"],
@@ -513,7 +529,7 @@ def write_attempts(run_dir: Path, attempts: list[Attempt], control_head: str) ->
             "noise_flag": timing_fields["noise_flag"],
             "stop_reason": attempt.stop_reason,
             "acceptance_policy": "compare pass plus interleaved same-harness paired timing",
-            "evidence_status": evidence.verdict if evidence.verdict == "NOISY_PENDING" else "neutral_pool_candidate" if attempt.verdict == "neutral" else attempt.verdict,
+            "evidence_status": evidence.verdict if evidence.verdict in {"accepted", "accepted_class_a", "accepted_noisy_single", "accepted_noisy_replicated", "NOISY_PENDING"} else "neutral_pool_candidate" if attempt.verdict == "neutral" else attempt.verdict,
             "promotion_sample_floor": PROMOTION_SAMPLE_FLOOR,
             "bundle_audit_sample_floor": BUNDLE_AUDIT_SAMPLE_FLOOR,
             "notes": attempt.notes,
@@ -564,6 +580,8 @@ def write_patch_queue(run_dir: Path, attempt_rows: list[dict[str, object]]) -> N
         verdict = str(row.get("verdict") or "")
         timing_verdict = str(row.get("timing_verdict") or verdict)
         noisy = str(row.get("noise_flag") or "").upper() == "NOISY"
+        accepted_noisy_single = timing_verdict == "accepted_noisy_single" or verdict == "accepted_noisy_single"
+        accepted_noisy_replicated = timing_verdict == "accepted_noisy_replicated" or verdict == "accepted_noisy_replicated"
         experiment_kind = str(row.get("experiment_kind") or "single")
         required_samples = BUNDLE_AUDIT_SAMPLE_FLOOR if experiment_kind == "neutral_stack" else PROMOTION_SAMPLE_FLOOR
         rows.append(
@@ -582,7 +600,13 @@ def write_patch_queue(run_dir: Path, attempt_rows: list[dict[str, object]]) -> N
                 "semantic_risk": row.get("semantic_risk", ""),
                 "stack_compatibility": row.get("stack_compatibility", ""),
                 "queue_state": (
-                    "NOISY_PENDING"
+                    "accepted_class_a"
+                    if timing_verdict == "accepted_class_a"
+                    else "accepted_noisy_replicated"
+                    if accepted_noisy_replicated
+                    else "accepted_noisy_single"
+                    if accepted_noisy_single
+                    else "NOISY_PENDING"
                     if noisy or timing_verdict == "NOISY_PENDING"
                     else "bundle_audit_pending"
                     if experiment_kind == "neutral_stack"
@@ -1099,7 +1123,7 @@ def run_dry_contract_v1(args: argparse.Namespace) -> int:
             "status": "stopped",
             "updated_at": utc_now(),
             "iteration": len(attempts),
-            "accepted_count": sum(1 for attempt in attempts if attempt.verdict == "accepted"),
+            "accepted_count": sum(1 for attempt in attempts if attempt.verdict in {"accepted", "accepted_class_a", "accepted_noisy_replicated"}),
             "neutral_count": sum(1 for attempt in attempts if attempt.verdict == "neutral"),
             "rejected_count": sum(1 for attempt in attempts if attempt.verdict == "rejected"),
             "consecutive_no_accepted": metrics["consecutive_no_accepted"],

@@ -59,6 +59,7 @@ from psi_patch_queue import (
     set_status as set_patch_status,
     snapshot_worktree,
 )
+from psi_timing_analysis import validate_class_a
 from psi_timing_history import (
     HISTORY_FIELDNAMES,
     default_host_key,
@@ -487,6 +488,8 @@ def _normalize_seed_candidate(raw: dict[str, Any], lane: str, index: int) -> dic
     candidate.setdefault("stack_members", [])
     candidate.setdefault("stack_compatibility", "single")
     candidate.setdefault("rank_score", 0.0)
+    candidate.setdefault("change_class", "class_b")
+    candidate.setdefault("replicated", False)
 
     missing = [
         field
@@ -502,6 +505,29 @@ def _normalize_seed_candidate(raw: dict[str, Any], lane: str, index: int) -> dic
     if not isinstance(candidate.get("source_evidence"), dict):
         candidate["source_evidence"] = {"kind": "seed_file", "raw": candidate["source_evidence"]}
     return candidate
+
+
+def apply_change_class_policy(candidate: dict[str, Any]) -> None:
+    requested = str(candidate.get("change_class") or "class_b").strip().lower()
+    if requested != "class_a":
+        candidate["change_class"] = "class_b"
+        candidate.setdefault("class_a_validation_reason", "")
+        return
+
+    valid, reason = validate_class_a(
+        hypothesis=str(candidate.get("hypothesis") or ""),
+        change_notes=" ".join(
+            str(candidate.get(key) or "")
+            for key in ("expected_effect", "source_evidence", "class_a_notes")
+        ),
+        touched_files=[str(path) for path in candidate.get("touched_files", [])],
+        candidate_id=str(candidate.get("candidate_id") or ""),
+    )
+    candidate["class_a_validation_reason"] = reason
+    if valid:
+        candidate["change_class"] = "class_a"
+    else:
+        candidate["change_class"] = "class_b"
 
 
 def load_candidate_seed_file(path: Path) -> dict[str, list[dict[str, Any]]]:
@@ -1016,6 +1042,8 @@ def call_remote_batch(
             "CANDIDATE_LANE": candidate["lane"],
             "CANDIDATE_TARGET": candidate["target"],
             "CANDIDATE_TOUCHED_FILES": "|".join(candidate.get("touched_files", [])),
+            "CANDIDATE_REPLICATED": "1" if candidate.get("replicated") else "",
+            "CHANGE_CLASS": str(candidate.get("change_class", "class_b")),
         }
     )
     for name in ("ROOT", "ENV_FILE", "BUILD_DIR", "RUNNER", "CANDIDATE_RUNNER", "CONFIG", "OUTPUT_DIR"):
@@ -1098,6 +1126,8 @@ def call_ssh_remote_batch(
         "CANDIDATE_LANE": candidate["lane"],
         "CANDIDATE_TARGET": candidate["target"],
         "CANDIDATE_TOUCHED_FILES": "|".join(candidate.get("touched_files", [])),
+        "CANDIDATE_REPLICATED": "1" if candidate.get("replicated") else "",
+        "CHANGE_CLASS": str(candidate.get("change_class", "class_b")),
     }
     for name in ("ENV_FILE", "RUNNER", "CONFIG", "OUTPUT_DIR"):
         value = getattr(args, name.lower(), None)
@@ -1744,8 +1774,14 @@ def judge_verdict(batch_state: dict[str, Any]) -> tuple[str, str]:
         return "rejected", batch_state.get("reason", "") or "remote TWAP gate rejected candidate"
 
     noise_flag = (batch_state.get("noise_flag") or "").upper()
-    timing = (batch_state.get("timing_verdict") or batch_state.get("timing_status") or "").upper()
-    if noise_flag == "NOISY" or timing == "NOISY_PENDING":
+    timing = (batch_state.get("timing_verdict") or batch_state.get("timing_status") or "").lower()
+    if timing == "accepted_noisy_replicated":
+        return "accepted_noisy_replicated", "statistically conclusive with replicated evidence; shared-host promotion, artifact marked non-bare-metal"
+    if timing == "accepted_noisy_single":
+        return "accepted_noisy_single", "statistically conclusive but measurement environment was noisy; single-run evidence only, queued for validation"
+    if timing == "accepted_class_a":
+        return "accepted_class_a", "Class A algorithmic change: correctness pass is sufficient; perf recorded but not gated."
+    if noise_flag == "NOISY" or timing == "noisy_pending":
         return (
             "NOISY_PENDING",
             "retry when same-host control stdev_ms < 1500 or paired range_ms < 1500",
@@ -1781,6 +1817,9 @@ def write_run_state(
     rejected_count: int,
     noisy_pending_count: int,
     infra_blocked_count: int,
+    accepted_class_a_count: int = 0,
+    accepted_noisy_single_count: int = 0,
+    accepted_noisy_replicated_count: int = 0,
 ) -> None:
     lane_counts = {lane: len(lanes_snapshot.get(lane, [])) for lane in LANE_PRIORITY}
     state = {
@@ -1801,6 +1840,9 @@ def write_run_state(
         "rejected_count": rejected_count,
         "noisy_pending_count": noisy_pending_count,
         "infra_blocked_count": infra_blocked_count,
+        "accepted_class_a_count": accepted_class_a_count,
+        "accepted_noisy_single_count": accepted_noisy_single_count,
+        "accepted_noisy_replicated_count": accepted_noisy_replicated_count,
         "first_accepted_stop": first_accepted_stop,
         "infra_failure_count": infra_failures,
         "last_exit_reason": stop_reason,
@@ -1938,6 +1980,7 @@ def iteration_step(
         return None, "", "no_targets", lanes, {}
 
     materialized, patch_meta, patch_reason = materialize_candidate_patch(args, run_dir, candidate, iteration)
+    apply_change_class_policy(candidate)
     if not materialized:
         candidate["candidate_workspace"] = str(patch_meta.get("candidate_workspace", ""))
         candidate["patch_path"] = str(patch_meta.get("patch_path", ""))
@@ -2013,6 +2056,22 @@ def iteration_step(
             set_patch_status(run_dir, candidate["candidate_id"], "failed", note=retry_condition)
         else:
             set_patch_status(run_dir, candidate["candidate_id"], "applied", note="accepted as new baseline")
+    elif verdict == "accepted_class_a":
+        set_patch_status(run_dir, candidate["candidate_id"], "applied", note="accepted as Class A algorithmic change; correctness pass sufficient")
+    elif verdict == "accepted_noisy_replicated":
+        set_patch_status(
+            run_dir,
+            candidate["candidate_id"],
+            "applied",
+            note="accepted with replicated evidence; shared-host promotion, artifact marked non-bare-metal",
+        )
+    elif verdict == "accepted_noisy_single":
+        set_patch_status(
+            run_dir,
+            candidate["candidate_id"],
+            "reverted",
+            note="accepted_noisy_single; queued for validation",
+        )
     elif verdict == "NOISY_PENDING":
         noisy_notes = (
             f"candidate_id={candidate['candidate_id']};"
@@ -2119,18 +2178,23 @@ def resolve_stop_file(run_dir: Path, stop_file: str | None) -> Path:
     return run_dir / "STOP"
 
 
-def count_verdict_rows(run_dir: Path) -> tuple[int, int, int, int, int]:
-    counts = {"accepted": 0, "neutral": 0, "rejected": 0, "NOISY_PENDING": 0, "infra_blocked": 0}
+def count_verdict_rows(run_dir: Path) -> tuple[int, int, int, int, int, int, int, int]:
+    counts = {"accepted": 0, "accepted_noisy_single": 0, "accepted_noisy_replicated": 0, "accepted_class_a": 0, "neutral": 0, "rejected": 0, "NOISY_PENDING": 0, "infra_blocked": 0}
     for row in read_tsv(run_dir / "attempts.tsv"):
         verdict = (row.get("verdict") or "").strip()
         if verdict in counts:
             counts[verdict] += 1
+    accepted_clean = counts["accepted"] + counts["accepted_class_a"]
+    accepted_noisy = counts["accepted_noisy_single"] + counts["accepted_noisy_replicated"]
     return (
-        counts["accepted"],
+        accepted_clean,
         counts["neutral"],
         counts["rejected"],
         counts["NOISY_PENDING"],
         counts["infra_blocked"],
+        accepted_noisy,
+        counts["accepted_class_a"],
+        counts["accepted_noisy_replicated"],
     )
 
 
@@ -2249,7 +2313,7 @@ def main() -> int:
             stop_detail = f"candidate {candidate['candidate_id']} stopped because TWAP control baseline lost pushes"
             break
 
-        accepted, neutral, rejected, noisy, infra_blocked = count_verdict_rows(run_dir)
+        accepted_clean, neutral, rejected, noisy, infra_blocked, accepted_noisy, accepted_class_a, accepted_noisy_replicated = count_verdict_rows(run_dir)
         write_run_state(
             run_dir,
             status="running",
@@ -2263,11 +2327,14 @@ def main() -> int:
             control_distribution=control_distribution,
             latest_candidate=latest_candidate,
             latest_verdict=latest_verdict,
-            accepted_count=accepted,
+            accepted_count=accepted_clean,
             neutral_count=neutral,
             rejected_count=rejected,
             noisy_pending_count=noisy,
             infra_blocked_count=infra_blocked,
+            accepted_class_a_count=accepted_class_a,
+            accepted_noisy_single_count=accepted_noisy - accepted_noisy_replicated,
+            accepted_noisy_replicated_count=accepted_noisy_replicated,
         )
         update_heartbeat(
             run_dir,
@@ -2275,7 +2342,7 @@ def main() -> int:
             f"iter {iteration} verdict={verdict} candidate={candidate['candidate_id']}",
         )
 
-        if verdict == "accepted" and args.first_accepted_stop:
+        if verdict in ("accepted", "accepted_class_a", "accepted_noisy_replicated") and args.first_accepted_stop:
             stop_reason = "accepted"
             stop_detail = f"accepted candidate {candidate['candidate_id']}; first-accepted-stop is enabled"
             break
@@ -2284,7 +2351,7 @@ def main() -> int:
         stop_reason = "budget_stop"
         stop_detail = "max-iterations exhausted without an explicit stop"
 
-    accepted, neutral, rejected, noisy, infra_blocked = count_verdict_rows(run_dir)
+    accepted_clean, neutral, rejected, noisy, infra_blocked, accepted_noisy, accepted_class_a, accepted_noisy_replicated = count_verdict_rows(run_dir)
     write_run_state(
         run_dir,
         status="stopped",
@@ -2298,11 +2365,14 @@ def main() -> int:
         control_distribution=control_distribution,
         latest_candidate=latest_candidate,
         latest_verdict=latest_verdict,
-        accepted_count=accepted,
+        accepted_count=accepted_clean,
         neutral_count=neutral,
         rejected_count=rejected,
         noisy_pending_count=noisy,
         infra_blocked_count=infra_blocked,
+        accepted_class_a_count=accepted_class_a,
+        accepted_noisy_single_count=accepted_noisy - accepted_noisy_replicated,
+        accepted_noisy_replicated_count=accepted_noisy_replicated,
     )
     update_heartbeat(run_dir, "stopped", stop_detail)
 
@@ -2310,11 +2380,13 @@ def main() -> int:
     print(f"status=stopped")
     print(f"last_exit_reason={stop_reason}")
     print(f"iterations={candidates_tried}")
-    print(f"accepted={accepted}")
+    print(f"accepted={accepted_clean}")
     print(f"neutral={neutral}")
     print(f"rejected={rejected}")
     print(f"noisy_pending={noisy}")
     print(f"infra_blocked={infra_blocked}")
+    print(f"accepted_noisy={accepted_noisy}")
+    print(f"accepted_noisy_replicated={accepted_noisy_replicated}")
     print(f"patch_manifest_path={run_dir / 'patches' / 'patch_manifest.json'}")
     return 0 if stop_reason in {"accepted", "budget_stop", "convergence_proven", "no_targets"} else 1
 
