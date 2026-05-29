@@ -455,5 +455,81 @@ diff --git a/PsiGrpcServer/twap_sale_service.cpp b/PsiGrpcServer/twap_sale_servi
         self.assertTrue(any("fanout regression" in item for item in violations))
 
 
+class RemoteBatchControlSourceKindTests(unittest.TestCase):
+    """Nail tests: BOTH psi_headless_remote.sh AND twap_headless_remote.sh must
+    emit control_source_kind in their run_state.json and comparison_summary.json
+    so the shared judge_verdict same-source gate works for both adapters.
+
+    These tests parse the shell scripts directly. Deleting the field from either
+    script will turn the relevant test red without needing a real devbox run.
+    The symmetry guard is the point: a fix to one script that is not mirrored in
+    the other shows up immediately.
+    """
+
+    SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
+    PSI_SCRIPT = SCRIPTS_DIR / "psi_headless_remote.sh"
+    TWAP_SCRIPT = SCRIPTS_DIR / "twap_headless_remote.sh"
+
+    def _text(self, script: Path) -> str:
+        return script.read_text(encoding="utf-8")
+
+    # ---- psi ----
+
+    def test_psi_remote_emits_control_source_kind_in_both_payloads(self) -> None:
+        """psi run_state and comparison_summary must both emit control_source_kind."""
+        text = self._text(self.PSI_SCRIPT)
+        count = text.count('"control_source_kind"')
+        self.assertGreaterEqual(count, 2,
+                                "psi_headless_remote.sh must emit control_source_kind "
+                                "in both run_state and comparison_summary payloads")
+
+    def test_psi_remote_control_source_kind_env_var_is_forwarded(self) -> None:
+        """CONTROL_SOURCE_KIND must be forwarded into psi Python heredocs."""
+        text = self._text(self.PSI_SCRIPT)
+        count = text.count("CONTROL_SOURCE_KIND")
+        self.assertGreaterEqual(count, 2,
+                                "CONTROL_SOURCE_KIND must appear in psi_headless_remote.sh "
+                                "at least in both Python payload blocks")
+
+    def test_psi_remote_script_passes_bash_syntax_check(self) -> None:
+        """bash -n must pass on psi_headless_remote.sh."""
+        import subprocess as sp
+        result = sp.run(
+            ["bash", "-n", str(self.PSI_SCRIPT)],
+            check=False, stdout=sp.PIPE, stderr=sp.STDOUT,
+            text=True, encoding="utf-8", errors="replace",
+        )
+        self.assertEqual(result.returncode, 0, f"bash -n psi failed:\n{result.stdout}")
+
+    # ---- twap ----
+
+    def test_twap_remote_emits_control_source_kind_in_both_payloads(self) -> None:
+        """twap run_state and comparison_summary must both emit control_source_kind."""
+        text = self._text(self.TWAP_SCRIPT)
+        count = text.count('"control_source_kind"')
+        self.assertGreaterEqual(count, 2,
+                                "twap_headless_remote.sh must emit control_source_kind "
+                                "in both run_state and comparison_summary payloads")
+
+    def test_twap_remote_control_source_kind_env_var_is_forwarded(self) -> None:
+        """CONTROL_SOURCE_KIND must be forwarded into twap Python heredocs."""
+        text = self._text(self.TWAP_SCRIPT)
+        count = text.count("CONTROL_SOURCE_KIND=")
+        # At minimum: top-level init, write_state env block, write_summary env block.
+        self.assertGreaterEqual(count, 3,
+                                "CONTROL_SOURCE_KIND must be set/forwarded in at least 3 places "
+                                "in twap_headless_remote.sh")
+
+    def test_twap_remote_script_passes_bash_syntax_check(self) -> None:
+        """bash -n must pass on twap_headless_remote.sh."""
+        import subprocess as sp
+        result = sp.run(
+            ["bash", "-n", str(self.TWAP_SCRIPT)],
+            check=False, stdout=sp.PIPE, stderr=sp.STDOUT,
+            text=True, encoding="utf-8", errors="replace",
+        )
+        self.assertEqual(result.returncode, 0, f"bash -n twap failed:\n{result.stdout}")
+
+
 if __name__ == "__main__":
     unittest.main()
