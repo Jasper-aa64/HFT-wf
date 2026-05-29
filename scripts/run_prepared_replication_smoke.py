@@ -25,7 +25,7 @@ def remote_preflight(remote_host: str) -> None:
     if not remote_host:
         return
     command = (
-        "busy=$(pgrep -af 'psi_headless_remote|twap_headless_remote|PsiTraderRunner' | grep -v grep || true); "
+        "busy=$(pgrep -af '[p]si_headless_remote|[t]wap_headless_remote|[P]siTraderRunner' || true); "
         "if [ -n \"$busy\" ]; then echo \"$busy\"; exit 42; fi; "
         "if [ -f /root/work/.perf_validation.lock ]; then echo validation_lock_present; cat /root/work/.perf_validation.lock; exit 43; fi; "
         "echo preflight_ok"
