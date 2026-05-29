@@ -166,6 +166,25 @@ def _merge_comparison_summary(batch_state: dict[str, Any], summary: dict[str, An
         batch_state["twap_case_deltas"] = summary["case_deltas"]
     if isinstance(summary.get("timing_samples"), list):
         batch_state["twap_timing_samples"] = summary["timing_samples"]
+    # Bridge paired_samples list → control_samples_ms / candidate_samples_ms so
+    # upsert_timing_from_batch does not early-return on empty sample lists.
+    # paired_samples is emitted by psi_headless_remote.sh when interleaved A/B
+    # pairs were collected; each entry has pair_index, control_ms, candidate_ms.
+    # Sort by pair_index first (defensive: remote output is ordered but not guaranteed).
+    # Only collect entries that carry both keys so the two lists stay equal-length.
+    paired_samples = summary.get("paired_samples")
+    if isinstance(paired_samples, list) and paired_samples:
+        ordered = sorted(
+            (p for p in paired_samples if isinstance(p, dict) and "control_ms" in p and "candidate_ms" in p),
+            key=lambda p: p.get("pair_index", 0),
+        )
+        if ordered:
+            control_ms = [float(p["control_ms"]) for p in ordered]
+            candidate_ms = [float(p["candidate_ms"]) for p in ordered]
+            if not batch_state.get("control_samples_ms"):
+                batch_state["control_samples_ms"] = control_ms
+            if not batch_state.get("candidate_samples_ms"):
+                batch_state["candidate_samples_ms"] = candidate_ms
 FORBIDDEN_PATCH_FILENAMES = {
     "config.yaml",
     "config.yml",

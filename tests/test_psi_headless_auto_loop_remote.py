@@ -475,5 +475,111 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
             self.assertEqual(manifest["entries"][0]["status"], "failed")
 
 
+    def test_merge_comparison_summary_bridges_paired_samples_to_sample_lists(self) -> None:
+        """_merge_comparison_summary must restore control_samples_ms / candidate_samples_ms
+        from paired_samples so upsert_timing_from_batch does not early-return on empty lists.
+        This is the bridge that was missing and caused timing_history.tsv to stay header-only
+        after a real devbox paired run.
+        """
+        summary = {
+            "compare_result": "pass",
+            "timing_verdict": "accepted_noisy_single",
+            "timing_verdict_reason": "statistically conclusive but noisy",
+            "timing_verdict_method": "paired_bootstrap_permutation_v1",
+            "control_source_kind": "synced_same_source",
+            "paired": {
+                "paired_sample_count": 3,
+                "noise_flag": "NOISY",
+                "median_delta_ms": "7268.000",
+                "paired_deltas_ms": "7053,7564,6278",
+                "bootstrap_ci_low_ms": "6937.000",
+                "bootstrap_ci_high_ms": "7643.500",
+                "permutation_p_value": "0.001000",
+            },
+            "paired_samples": [
+                {"pair_index": 1, "control_ms": 58590.0, "candidate_ms": 51537.0, "delta_ms": 7053.0},
+                {"pair_index": 2, "control_ms": 58609.0, "candidate_ms": 51045.0, "delta_ms": 7564.0},
+                {"pair_index": 3, "control_ms": 58719.0, "candidate_ms": 52441.0, "delta_ms": 6278.0},
+            ],
+            "control": {"median_ms": "58639.333"},
+        }
+        batch_state: dict = {}
+        auto_loop._merge_comparison_summary(batch_state, summary)
+
+        self.assertIsInstance(batch_state.get("control_samples_ms"), list)
+        self.assertIsInstance(batch_state.get("candidate_samples_ms"), list)
+        self.assertEqual(batch_state["control_samples_ms"], [58590.0, 58609.0, 58719.0])
+        self.assertEqual(batch_state["candidate_samples_ms"], [51537.0, 51045.0, 52441.0])
+        self.assertEqual(batch_state["noise_flag"], "NOISY")
+        self.assertEqual(batch_state["timing_verdict"], "accepted_noisy_single")
+
+    def test_paired_samples_bridge_enables_timing_history_write(self) -> None:
+        """End-to-end write-read: after the bridge fix, a summary with paired_samples must
+        produce a non-empty timing_history.tsv with a candidate row carrying the verdict.
+        This is the real-world path that was broken (history stayed header-only).
+        """
+        with tempfile.TemporaryDirectory(prefix="psi_bridge_e2e_") as raw_dir:
+            run_dir = Path(raw_dir)
+            candidate = {
+                "candidate_id": "stack_skip_unused_row_fields",
+                "lane": "combination",
+                "target": "handlerData.row_loop.stack",
+                "touched_files": ["PsiFactorPipline/PsiReadWrite.cpp"],
+            }
+            summary = {
+                "compare_result": "pass",
+                "timing_verdict": "accepted_noisy_single",
+                "timing_verdict_reason": "statistically conclusive but noisy",
+                "timing_verdict_method": "paired_bootstrap_permutation_v1",
+                "control_source_kind": "synced_same_source",
+                "paired": {
+                    "paired_sample_count": 3,
+                    "noise_flag": "NOISY",
+                    "median_delta_ms": "7268.000",
+                    "paired_deltas_ms": "7053,7564,6278",
+                    "bootstrap_ci_low_ms": "6937.000",
+                    "bootstrap_ci_high_ms": "7643.500",
+                    "permutation_p_value": "0.001000",
+                },
+                "paired_samples": [
+                    {"pair_index": 1, "control_ms": 58590.0, "candidate_ms": 51537.0, "delta_ms": 7053.0},
+                    {"pair_index": 2, "control_ms": 58609.0, "candidate_ms": 51045.0, "delta_ms": 7564.0},
+                    {"pair_index": 3, "control_ms": 58719.0, "candidate_ms": 52441.0, "delta_ms": 6278.0},
+                ],
+                "control": {"median_ms": "58639.333"},
+            }
+            batch_state: dict = {}
+            auto_loop._merge_comparison_summary(batch_state, summary)
+
+            # Use real upsert (not mocked) to verify the write path
+            auto_loop.upsert_timing_from_batch(
+                run_dir,
+                candidate,
+                batch_state,
+                "devbox",
+                verdict="accepted_noisy_single",
+                verdict_reason="statistically conclusive but noisy",
+            )
+
+            rows = auto_loop.read_tsv(run_dir / "timing_history.tsv")
+            candidate_rows = [r for r in rows if r.get("kind") == "candidate"]
+            self.assertGreater(len(candidate_rows), 0, "timing_history.tsv must have at least one candidate row")
+            self.assertEqual(candidate_rows[0]["verdict"], "accepted_noisy_single")
+            self.assertEqual(candidate_rows[0]["timing_verdict"], "accepted_noisy_single")
+            self.assertEqual(candidate_rows[0]["noise_flag"], "NOISY")
+
+            # Verify replication detection can now read back the written history
+            fresh_run = Path(raw_dir) / "fresh_replication_run"
+            fresh_run.mkdir()
+            self.assertTrue(
+                auto_loop._candidate_has_prior_replication(
+                    fresh_run,
+                    candidate,
+                    history_path=run_dir / "timing_history.tsv",
+                    host_key="devbox",
+                )
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
