@@ -1031,7 +1031,6 @@ def _run_external_patch_command(
     iteration: int,
     candidate_ledger: str = "",
 ) -> tuple[int, str]:
-    candidate_replication_detected = _candidate_replication_detected(args, run_dir, candidate)
     env = os.environ.copy()
     env.update(
         {

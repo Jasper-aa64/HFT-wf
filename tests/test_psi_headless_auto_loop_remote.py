@@ -375,6 +375,36 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
         self.assertEqual(verdict, "needs_paired_evidence")
         self.assertIn("CANDIDATE_RUNNER", reason)
 
+    def test_external_patch_command_materializes_without_replication_args(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="psi_auto_loop_patch_") as raw_dir:
+            run_dir = Path(raw_dir)
+            source = run_dir / "source"
+            source.mkdir()
+            (source / "base.txt").write_text("base\n", encoding="utf-8")
+            patch_cmd = run_dir / "patch.cmd"
+            patch_cmd.write_text("@echo patched>> probe.txt\r\n", encoding="utf-8")
+            candidate = {
+                "candidate_id": "candidate",
+                "lane": "evidence",
+                "target": "handlerData.row_loop.stack",
+                "touched_files": ["probe.txt"],
+                "hypothesis": "probe",
+                "expected_effect": "probe",
+                "semantic_risk": "low",
+            }
+            args = SimpleNamespace(
+                source_root=str(source),
+                candidate_workspace="",
+                reuse_candidate_workspace=False,
+                patch_command=str(patch_cmd),
+                candidate_ledger="",
+            )
+
+            ok, patch_meta, reason = auto_loop.materialize_candidate_patch(args, run_dir, candidate, 1)
+
+            self.assertTrue(ok, reason)
+            self.assertTrue(Path(patch_meta["patch_path"]).exists())
+
     def test_iteration_step_records_remote_infra_as_failed_not_rejected(self) -> None:
         with tempfile.TemporaryDirectory(prefix="psi_auto_loop_infra_") as raw_dir:
             run_dir = Path(raw_dir)
