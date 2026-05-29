@@ -62,6 +62,7 @@ class RunPreparedCandidateDriverTests(unittest.TestCase):
                     run_dir=Path(items[items.index("--run-dir") + 1]),
                     replication_history="",
                     host_key=items[items.index("--host-key") + 1] if "--host-key" in items else "",
+                    remote_run_dir=items[items.index("--remote-run-dir") + 1],
                     root="",
                     control_root="",
                     candidate_ledger=items[items.index("--candidate-ledger") + 1],
@@ -89,6 +90,7 @@ class RunPreparedCandidateDriverTests(unittest.TestCase):
             def fake_call_remote_batch(args, _run_dir, candidate, iteration):
                 captured["replication_history"] = args.replication_history
                 captured["host_key"] = args.host_key
+                captured["remote_run_dir"] = args.remote_run_dir
                 captured["candidate_has_replicated_key"] = "replicated" in candidate
                 return (
                     0,
@@ -144,6 +146,7 @@ class RunPreparedCandidateDriverTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(captured["replication_history"], str(history.resolve()))
         self.assertEqual(captured["host_key"], "devbox")
+        self.assertTrue(str(captured["remote_run_dir"]).endswith(f"/{run_dir.parent.name}/{run_dir.name}"))
         self.assertFalse(captured["candidate_has_replicated_key"])
         self.assertTrue(written_states[-1]["candidate_replication_detected"])
 

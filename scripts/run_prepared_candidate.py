@@ -120,6 +120,8 @@ def main() -> int:
             "scripts/psi_headless_remote.sh",
             "--remote-run-root",
             "/root/work/psi_experiments/runs",
+            "--remote-run-dir",
+            f"/root/work/psi_experiments/runs/{run_dir.parent.name}/{run_dir.name}",
             "--measure-runs",
             str(ns.measure_runs),
             "--no-compare-runs",
