@@ -528,6 +528,11 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
         self.assertEqual(batch_state["candidate_samples_ms"], [51537.0, 51045.0, 52441.0])
         self.assertEqual(batch_state["noise_flag"], "NOISY")
         self.assertEqual(batch_state["timing_verdict"], "accepted_noisy_single")
+        # #4: delta_ms and candidate_median_ms must be back-filled from paired statistics
+        self.assertAlmostEqual(batch_state.get("delta_ms", 0), 7268.0, places=1,
+                               msg="delta_ms must be non-zero after bridge (was 0 before fix)")
+        self.assertAlmostEqual(batch_state.get("candidate_median_ms", 0), 51537.0, places=1,
+                               msg="candidate_median_ms must be set from candidate_ms list")
 
     def test_paired_samples_bridge_enables_timing_history_write(self) -> None:
         """End-to-end write-read: after the bridge fix, a summary with paired_samples must
@@ -583,6 +588,13 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
             self.assertEqual(candidate_rows[0]["verdict"], "accepted_noisy_single")
             self.assertEqual(candidate_rows[0]["timing_verdict"], "accepted_noisy_single")
             self.assertEqual(candidate_rows[0]["noise_flag"], "NOISY")
+            # #4: delta_ms in timing_history row must be non-zero and consistent with
+            # the median_delta_ms that was bridged from paired_samples.
+            row_delta = float(candidate_rows[0].get("delta_ms") or 0)
+            self.assertGreater(row_delta, 0,
+                               "timing_history candidate delta_ms must be non-zero after bridge fix")
+            self.assertAlmostEqual(row_delta, 7268.0, places=1,
+                                   msg="timing_history delta_ms must match bridged median_delta_ms")
 
             # Verify replication detection can now read back the written history
             fresh_run = Path(raw_dir) / "fresh_replication_run"

@@ -185,6 +185,17 @@ def _merge_comparison_summary(batch_state: dict[str, Any], summary: dict[str, An
                 batch_state["control_samples_ms"] = control_ms
             if not batch_state.get("candidate_samples_ms"):
                 batch_state["candidate_samples_ms"] = candidate_ms
+            # Backfill delta_ms and candidate_median_ms so attempts.tsv and
+            # timing_history.tsv carry non-zero values for paired remote runs.
+            # median_delta_ms was already copied from PAIRED_NUMERIC_FIELDS above.
+            if not batch_state.get("delta_ms"):
+                median_delta = _coerce_float(
+                    batch_state.get("median_delta_ms") or summary.get("median_delta_ms")
+                )
+                if median_delta is not None:
+                    batch_state["delta_ms"] = median_delta
+            if not batch_state.get("candidate_median_ms"):
+                batch_state["candidate_median_ms"] = statistics.median(candidate_ms)
 FORBIDDEN_PATCH_FILENAMES = {
     "config.yaml",
     "config.yml",
