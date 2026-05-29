@@ -53,6 +53,7 @@ Python API (SSH mode)::
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import shlex
@@ -65,6 +66,7 @@ from typing import Any, Sequence
 
 DEFAULT_LOCK_PATH = "/root/work/.perf_validation.lock"
 DEFAULT_REMOTE_HOST = "devbox"
+DEFAULT_STALE_AFTER_SECONDS = 12 * 60 * 60
 
 
 def utc_now() -> str:
@@ -117,6 +119,72 @@ def _write_lock_file(lock_path: str, payload: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
+def _parse_timestamp(raw: Any) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        text = str(raw)
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(text)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except ValueError:
+        return None
+
+
+def _pid_alive(pid: Any) -> bool | None:
+    try:
+        value = int(pid)
+    except (TypeError, ValueError):
+        return None
+    if value <= 0:
+        return None
+    if os.name == "nt":
+        return None
+    try:
+        os.kill(value, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError as exc:
+        if exc.errno == errno.ESRCH or getattr(exc, "winerror", None) == 87:
+            return False
+        return None
+    return True
+
+
+def _stale_reason(lock_data: dict[str, Any], *, stale_after_seconds: int = DEFAULT_STALE_AFTER_SECONDS) -> str:
+    if lock_data.get("_corrupt"):
+        return ""
+    lock_host = str(lock_data.get("hostname") or "")
+    local_host = hostname()
+    if lock_host and local_host and lock_host == local_host:
+        alive = _pid_alive(lock_data.get("pid"))
+        if alive is True:
+            return ""
+        if alive is False:
+            return f"holder pid {lock_data.get('pid')} is not alive on host {lock_host}"
+    timestamp = _parse_timestamp(lock_data.get("timestamp"))
+    if timestamp is not None:
+        age = (datetime.now(timezone.utc) - timestamp).total_seconds()
+        if age > stale_after_seconds:
+            return f"lock age {int(age)}s exceeds stale threshold {stale_after_seconds}s"
+    return ""
+
+
+def _remove_stale_lock(lock_path: str, lock_data: dict[str, Any], reason: str) -> bool:
+    try:
+        path = Path(lock_path)
+        stale_path = path.with_name(f"{path.name}.stale.{os.getpid()}")
+        os.replace(str(path), str(stale_path))
+    except OSError:
+        return False
+    return True
+
+
 def acquire_lock(
     lock_path: str = DEFAULT_LOCK_PATH,
     *,
@@ -132,24 +200,50 @@ def acquire_lock(
     """
     existing = _read_lock_file(lock_path)
     if existing is not None:
-        holder = existing.get("run_id", "unknown")
+        stale_reason = _stale_reason(existing)
+        if stale_reason and not _remove_stale_lock(lock_path, existing, stale_reason):
+            return {
+                "acquired": False,
+                "reason": f"stale lock detected but could not remove it: {stale_reason}",
+                "lock_data": existing,
+            }
+        if not stale_reason:
+            holder = existing.get("run_id", "unknown")
+            return {
+                "acquired": False,
+                "reason": f"lock held by another run: {holder}",
+                "lock_data": existing,
+            }
+    try:
+        path = Path(lock_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock_data: dict[str, Any] = {
+            "run_id": run_id,
+            "script_name": script_name,
+            "candidate_id": candidate_id,
+            "timestamp": utc_now(),
+            "owner_command": owner_command or " ".join(sys.argv),
+            "pid": os.getpid(),
+            "hostname": hostname(),
+        }
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        fd = os.open(str(path), flags, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(lock_data, indent=2, ensure_ascii=False) + "\n")
+    except FileExistsError:
+        existing = _read_lock_file(lock_path)
+        holder = existing.get("run_id", "unknown") if existing else "unknown"
         return {
             "acquired": False,
             "reason": f"lock held by another run: {holder}",
             "lock_data": existing,
         }
-
-    lock_data: dict[str, Any] = {
-        "run_id": run_id,
-        "script_name": script_name,
-        "candidate_id": candidate_id,
-        "timestamp": utc_now(),
-        "owner_command": owner_command or " ".join(sys.argv),
-        "pid": os.getpid(),
-        "hostname": hostname(),
-    }
-
-    _write_lock_file(lock_path, lock_data)
+    except OSError as exc:
+        return {
+            "acquired": False,
+            "reason": f"failed to create lock file: {exc}",
+            "lock_data": None,
+        }
 
     # Verify the write
     written = _read_lock_file(lock_path)

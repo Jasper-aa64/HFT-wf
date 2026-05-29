@@ -217,8 +217,8 @@ class PairedTimingAnalysisTests(unittest.TestCase):
         self.assertEqual(candidate["change_class"], "class_b")
         self.assertIn("forbidden", candidate["class_a_validation_reason"])
 
-    def test_apply_change_class_policy_preserves_valid_class_a(self) -> None:
-        """Production auto-loop keeps class_a only for whitelisted pure removals."""
+    def test_apply_change_class_policy_downgrades_text_valid_class_a_until_patch_validation_exists(self) -> None:
+        """Text-only Class A evidence is advisory; headless mode still requires timing."""
         candidate = {
             "candidate_id": "drop_unused_timestamp_format_arg",
             "hypothesis": "removes unused parameter from timestamp conversion helper",
@@ -229,8 +229,9 @@ class PairedTimingAnalysisTests(unittest.TestCase):
 
         apply_change_class_policy(candidate)
 
-        self.assertEqual(candidate["change_class"], "class_a")
+        self.assertEqual(candidate["change_class"], "class_b")
         self.assertIn("valid Class A", candidate["class_a_validation_reason"])
+        self.assertIn("patch-structure validation", candidate["class_a_validation_reason"])
 
 
 if __name__ == "__main__":

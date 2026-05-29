@@ -79,7 +79,15 @@ STOP_REASONS_GLOBAL = {
 }
 
 LANE_PRIORITY = ("evidence", "insight", "combination")
-INFRA_FAILURES = {"missing_env_file", "runner_busy", "build_failed"}
+INFRA_FAILURES = {
+    "missing_env_file",
+    "remote_sync_failed",
+    "runner_busy",
+    "validation_lock_blocked",
+    "build_failed",
+    "remote_timeout",
+    "remote_state_unavailable",
+}
 FORBIDDEN_PATCH_PATH_PARTS = {
     "baseline",
     "benchmark",
@@ -123,6 +131,13 @@ def _merge_comparison_summary(batch_state: dict[str, Any], summary: dict[str, An
         "timing_verdict",
         "timing_verdict_reason",
         "timing_verdict_method",
+        "control_source_kind",
+        "control_root",
+        "candidate_root",
+        "control_build_dir",
+        "candidate_build_dir",
+        "control_runner",
+        "candidate_runner",
     ):
         if field in summary:
             batch_state[field] = summary[field]
@@ -132,8 +147,6 @@ def _merge_comparison_summary(batch_state: dict[str, Any], summary: dict[str, An
         batch_state["compare_status"] = "pass"
     if summary.get("timing_status") and not batch_state.get("timing_status"):
         batch_state["timing_status"] = summary["timing_status"]
-    if summary.get("decision") == "promotion_candidate" and summary.get("accepted") is True:
-        batch_state["timing_verdict"] = "accepted"
     paired = summary.get("paired") if isinstance(summary.get("paired"), dict) else {}
     for field in PAIRED_NUMERIC_FIELDS:
         value = paired.get(field, summary.get(field))
@@ -380,7 +393,7 @@ def refresh_control_distribution(run_dir: Path, host_key: str, window: int = 20)
 def _remote_runner_idle(args: argparse.Namespace) -> tuple[bool, str]:
     if not args.remote_host:
         return True, "local/no-remote-host"
-    result = _ssh(args.remote_host, "pgrep -a -x PsiTraderRunner || true")
+    result = _ssh(args.remote_host, "pgrep -a -x PsiTraderRunner || true", timeout=_remote_timeout(args))
     active = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
     if active:
         return False, "; ".join(active[:3])
@@ -525,9 +538,11 @@ def apply_change_class_policy(candidate: dict[str, Any]) -> None:
     )
     candidate["class_a_validation_reason"] = reason
     if valid:
-        candidate["change_class"] = "class_a"
-    else:
-        candidate["change_class"] = "class_b"
+        candidate["class_a_validation_reason"] = (
+            reason
+            + "; auto Class A acceptance is disabled in headless mode until patch-structure validation exists"
+        )
+    candidate["change_class"] = "class_b"
 
 
 def load_candidate_seed_file(path: Path) -> dict[str, list[dict[str, Any]]]:
@@ -722,6 +737,17 @@ def _remote_candidate_workspace(args: argparse.Namespace, run_dir: Path, candida
     )
 
 
+def _local_control_workspace(run_dir: Path, candidate: dict[str, Any]) -> Path:
+    return (run_dir / "control_workspaces" / candidate["candidate_id"]).resolve()
+
+
+def _remote_control_workspace(args: argparse.Namespace, run_dir: Path, candidate: dict[str, Any]) -> str:
+    return _remote_join(
+        args.remote_candidate_workspace_root or _remote_join(_remote_run_root(args, run_dir), "candidate_workspaces"),
+        f"{candidate['candidate_id']}_control",
+    )
+
+
 def _remote_default_build_dir(root: str) -> str:
     return _remote_join(root, "build/linux-relwithdebinfo-boost182")
 
@@ -730,7 +756,21 @@ def _remote_default_runner(build_dir: str) -> str:
     return _remote_join(build_dir, "build_x64/RelWithDebInfo/bin/PsiTraderRunner/PsiTraderRunner")
 
 
-def _ssh(remote_host: str, command: str, *, text: bool = True) -> subprocess.CompletedProcess:
+def _truthy(value: Any) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _remote_timeout(args: argparse.Namespace) -> int:
+    return int(getattr(args, "remote_timeout_seconds", 14400) or 14400)
+
+
+def _ssh(
+    remote_host: str,
+    command: str,
+    *,
+    text: bool = True,
+    timeout: int | None = None,
+) -> subprocess.CompletedProcess:
     kwargs: dict[str, Any] = {
         "check": False,
         "stdout": subprocess.PIPE,
@@ -738,7 +778,84 @@ def _ssh(remote_host: str, command: str, *, text: bool = True) -> subprocess.Com
     }
     if text:
         kwargs.update({"text": True, "encoding": "utf-8", "errors": "replace"})
-    return subprocess.run(["ssh", remote_host, command], **kwargs)
+    return subprocess.run(["ssh", remote_host, command], timeout=timeout, **kwargs)
+
+
+def _timeout_completed_process(command: list[str], timeout: int, *, text: bool = True) -> subprocess.CompletedProcess:
+    stdout: str | bytes
+    stderr: str | bytes
+    if text:
+        stdout = ""
+        stderr = f"command timed out after {timeout}s"
+    else:
+        stdout = b""
+        stderr = f"command timed out after {timeout}s".encode("utf-8")
+    return subprocess.CompletedProcess(command, 124, stdout=stdout, stderr=stderr)
+
+
+def _candidate_has_prior_replication(
+    run_dir: Path,
+    candidate: dict[str, Any],
+    *,
+    history_path: Path | None = None,
+    host_key: str = "",
+) -> bool:
+    """Return true only when local artifacts show prior positive evidence.
+
+    `replicated` is a cross-run history property, not a candidate-authored
+    label. Prefer timing_history.tsv so prepared replication runs that use a
+    fresh run directory can still see a prior independent locked run.
+    """
+
+    candidate_id = str(candidate.get("candidate_id") or "").strip()
+    target = str(candidate.get("target") or "").strip()
+    current_run_id = run_dir.name
+    positive_verdicts = {
+        "accepted",
+        "accepted_class_a",
+        "accepted_noisy_single",
+        "accepted_noisy_replicated",
+    }
+    candidate_history_path = history_path or (run_dir / "timing_history.tsv")
+    for row in read_tsv(candidate_history_path):
+        verdict = str(row.get("verdict") or row.get("timing_verdict") or "").strip()
+        if verdict not in positive_verdicts:
+            continue
+        if host_key and str(row.get("host_key") or "").strip() not in {"", host_key}:
+            continue
+        row_run_id = str(row.get("run_id") or row.get("bundle_id") or "").strip()
+        if row_run_id and row_run_id == current_run_id:
+            continue
+        row_kind = str(row.get("kind") or "").strip()
+        if row_kind and row_kind != "candidate":
+            continue
+        row_target = str(row.get("target") or row.get("stage") or "").strip()
+        same_target = target and (row_target == target or row_target.startswith(f"{target}|"))
+        if same_target:
+            return True
+
+    # Backward-compatible fallback for non-prepared long runs that continue in
+    # the same run dir. Do not treat infra/screening rows as prior evidence.
+    for row in read_tsv(run_dir / "attempts.tsv"):
+        verdict = str(row.get("verdict") or "").strip()
+        if verdict not in positive_verdicts:
+            continue
+        if str(row.get("compare_status") or "").strip().lower() not in {"pass", "ok"}:
+            continue
+        same_candidate = candidate_id and str(row.get("candidate_id") or "").strip() == candidate_id
+        same_target = target and str(row.get("target") or "").strip() == target
+        if same_candidate or same_target:
+            return True
+    return False
+
+
+def _candidate_replication_detected(args: argparse.Namespace, run_dir: Path, candidate: dict[str, Any]) -> bool:
+    return _candidate_has_prior_replication(
+        run_dir,
+        candidate,
+        history_path=Path(args.replication_history) if getattr(args, "replication_history", "") else None,
+        host_key=getattr(args, "host_key", "") or "",
+    )
 
 
 def _sync_candidate_workspace_to_remote(
@@ -758,15 +875,20 @@ def _sync_candidate_workspace_to_remote(
         archive_base = Path(tmp) / candidate["candidate_id"]
         archive_path = Path(shutil.make_archive(str(archive_base), "gztar", root_dir=workspace))
         remote_archive = f"/tmp/{archive_path.name}"
-        scp = subprocess.run(
-            ["scp", str(archive_path), f"{args.remote_host}:{remote_archive}"],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
+        scp_cmd = ["scp", str(archive_path), f"{args.remote_host}:{remote_archive}"]
+        try:
+            scp = subprocess.run(
+                scp_cmd,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=_remote_timeout(args),
+            )
+        except subprocess.TimeoutExpired:
+            scp = _timeout_completed_process(scp_cmd, _remote_timeout(args))
         if scp.returncode != 0:
             return "", f"scp candidate workspace failed: {scp.stderr.strip()}"
 
@@ -777,9 +899,65 @@ def _sync_candidate_workspace_to_remote(
         f"tar -xzf {_remote_quote(remote_archive)} -C {_remote_quote(remote_ws)} && "
         f"rm -f {_remote_quote(remote_archive)}"
     )
-    result = _ssh(args.remote_host, unpack)
+    try:
+        result = _ssh(args.remote_host, unpack, timeout=_remote_timeout(args))
+    except subprocess.TimeoutExpired:
+        result = _timeout_completed_process(["ssh", args.remote_host, unpack], _remote_timeout(args))
     if result.returncode != 0:
         return "", f"remote candidate workspace unpack failed: {result.stderr.strip() or result.stdout.strip()}"
+    return remote_ws, ""
+
+
+def _sync_control_workspace_to_remote(
+    args: argparse.Namespace,
+    run_dir: Path,
+    candidate: dict[str, Any],
+) -> tuple[str, str]:
+    """Sync the unpatched source workspace for same-source A/B control builds."""
+
+    source_root = _source_root(args)
+    if not source_root.exists():
+        return "", f"control source root does not exist: {source_root}"
+    control_workspace = _local_control_workspace(run_dir, candidate)
+    ok, reason = _prepare_workspace(source_root, control_workspace, refresh=True)
+    if not ok:
+        return "", reason
+
+    remote_ws = _remote_control_workspace(args, run_dir, candidate)
+    with tempfile.TemporaryDirectory(prefix="psi_control_sync_") as tmp:
+        archive_base = Path(tmp) / f"{candidate['candidate_id']}_control"
+        archive_path = Path(shutil.make_archive(str(archive_base), "gztar", root_dir=control_workspace))
+        remote_archive = f"/tmp/{archive_path.name}"
+        scp_cmd = ["scp", str(archive_path), f"{args.remote_host}:{remote_archive}"]
+        try:
+            scp = subprocess.run(
+                scp_cmd,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=_remote_timeout(args),
+            )
+        except subprocess.TimeoutExpired:
+            scp = _timeout_completed_process(scp_cmd, _remote_timeout(args))
+        if scp.returncode != 0:
+            return "", f"scp control workspace failed: {scp.stderr.strip()}"
+
+    parent = str(Path(remote_ws).parent).replace("\\", "/")
+    unpack = (
+        f"rm -rf {_remote_quote(remote_ws)} && "
+        f"mkdir -p {_remote_quote(parent)} {_remote_quote(remote_ws)} && "
+        f"tar -xzf {_remote_quote(remote_archive)} -C {_remote_quote(remote_ws)} && "
+        f"rm -f {_remote_quote(remote_archive)}"
+    )
+    try:
+        result = _ssh(args.remote_host, unpack, timeout=_remote_timeout(args))
+    except subprocess.TimeoutExpired:
+        result = _timeout_completed_process(["ssh", args.remote_host, unpack], _remote_timeout(args))
+    if result.returncode != 0:
+        return "", f"remote control workspace unpack failed: {result.stderr.strip() or result.stdout.strip()}"
     return remote_ws, ""
 
 
@@ -853,6 +1031,7 @@ def _run_external_patch_command(
     iteration: int,
     candidate_ledger: str = "",
 ) -> tuple[int, str]:
+    candidate_replication_detected = _candidate_replication_detected(args, run_dir, candidate)
     env = os.environ.copy()
     env.update(
         {
@@ -1043,7 +1222,7 @@ def call_remote_batch(
             "CANDIDATE_LANE": candidate["lane"],
             "CANDIDATE_TARGET": candidate["target"],
             "CANDIDATE_TOUCHED_FILES": "|".join(candidate.get("touched_files", [])),
-            "CANDIDATE_REPLICATED": "1" if candidate.get("replicated") else "",
+            "CANDIDATE_REPLICATED": "1" if candidate_replication_detected else "",
             "CHANGE_CLASS": str(candidate.get("change_class", "class_b")),
         }
     )
@@ -1069,14 +1248,21 @@ def call_remote_batch(
         handle.write(f"candidate_id={candidate['candidate_id']}\n")
         handle.write(f"lane={candidate['lane']}\n")
         handle.flush()
-        result = subprocess.run(
-            [args.bash, str(script)],
-            cwd=repo_root(),
-            env=env,
-            stdout=handle,
-            stderr=subprocess.STDOUT,
-        )
+        local_cmd = [args.bash, str(script)]
+        try:
+            result = subprocess.run(
+                local_cmd,
+                cwd=repo_root(),
+                env=env,
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                timeout=_remote_timeout(args),
+            )
+        except subprocess.TimeoutExpired:
+            handle.write(f"local batch timed out after {_remote_timeout(args)}s\n")
+            result = _timeout_completed_process(local_cmd, _remote_timeout(args))
     batch_state = read_json(iteration_dir / "run_state.json")
+    batch_state["candidate_replication_detected"] = candidate_replication_detected
     return result.returncode, iteration_dir, batch_state
 
 
@@ -1092,7 +1278,9 @@ def call_ssh_remote_batch(
     log_path = run_dir / "logs" / f"iter_{iteration:03d}.log"
     remote_iter_dir = _remote_iteration_dir(args, run_dir, candidate, iteration)
     remote_ws = ""
+    remote_control_ws = ""
     sync_reason = ""
+    candidate_replication_detected = _candidate_replication_detected(args, run_dir, candidate)
     candidate_ws = candidate.get("candidate_workspace")
     if candidate_ws:
         remote_ws, sync_reason = _sync_candidate_workspace_to_remote(args, run_dir, candidate)
@@ -1114,8 +1302,31 @@ def call_ssh_remote_batch(
                 "patch_materialization_status": "materialized",
                 "remote_sync_status": "failed",
                 "remote_sync_reason": sync_reason,
+                "candidate_replication_detected": candidate_replication_detected,
+            }
+        remote_control_ws, sync_reason = _sync_control_workspace_to_remote(args, run_dir, candidate)
+        if sync_reason:
+            log_path.write_text(sync_reason + "\n", encoding="utf-8")
+            return 1, iteration_dir, {
+                "status": "stopped",
+                "batch_status": "failed",
+                "iteration": iteration,
+                "candidate_id": candidate["candidate_id"],
+                "lane": candidate["lane"],
+                "target": candidate["target"],
+                "build_status": "not_run",
+                "compare_status": "not_run",
+                "timing_status": "remote_sync_failed",
+                "timing_verdict": "remote_sync_failed",
+                "comparison_accepted": False,
+                "paired_sample_count": 0,
+                "patch_materialization_status": "materialized",
+                "remote_sync_status": "failed",
+                "remote_sync_reason": sync_reason,
+                "candidate_replication_detected": candidate_replication_detected,
             }
         candidate["remote_candidate_workspace"] = remote_ws
+        candidate["remote_control_workspace"] = remote_control_ws
 
     remote_env = {
         "RUN_ID": f"{run_dir.name}_iter_{iteration:03d}",
@@ -1128,7 +1339,7 @@ def call_ssh_remote_batch(
         "CANDIDATE_LANE": candidate["lane"],
         "CANDIDATE_TARGET": candidate["target"],
         "CANDIDATE_TOUCHED_FILES": "|".join(candidate.get("touched_files", [])),
-        "CANDIDATE_REPLICATED": "1" if candidate.get("replicated") else "",
+        "CANDIDATE_REPLICATED": "1" if candidate_replication_detected else "",
         "CHANGE_CLASS": str(candidate.get("change_class", "class_b")),
     }
     for name in ("ENV_FILE", "RUNNER", "CONFIG", "OUTPUT_DIR"):
@@ -1140,9 +1351,15 @@ def call_ssh_remote_batch(
         candidate_build_dir = _remote_default_build_dir(remote_ws)
         remote_env["BUILD_DIR"] = candidate_build_dir
         remote_env["CANDIDATE_RUNNER"] = _remote_default_runner(candidate_build_dir)
-        if args.control_root or args.root:
+        if remote_control_ws:
+            control_build_dir = _remote_default_build_dir(remote_control_ws)
+            remote_env["CONTROL_ROOT"] = remote_control_ws
+            remote_env["CONTROL_BUILD_DIR"] = control_build_dir
+            remote_env["RUNNER"] = _remote_default_runner(control_build_dir)
+            remote_env["CONTROL_SOURCE_KIND"] = "synced_same_source"
+        elif args.control_root or args.root:
             remote_env["CONTROL_ROOT"] = str(args.control_root or args.root)
-        if not args.runner:
+        if not args.runner and not remote_control_ws:
             control_root = str(args.root or "/root/work/Code1/psi-trader-liangjunming")
             remote_env["RUNNER"] = _remote_default_runner(_remote_default_build_dir(control_root))
     elif args.root:
@@ -1180,12 +1397,27 @@ def call_ssh_remote_batch(
         handle.write(f"remote_run_dir={remote_iter_dir}\n")
         if remote_ws:
             handle.write(f"remote_candidate_workspace={remote_ws}\n")
+        if remote_control_ws:
+            handle.write(f"remote_control_workspace={remote_control_ws}\n")
         handle.flush()
-        result = _ssh(args.remote_host, command)
+        try:
+            result = _ssh(args.remote_host, command, timeout=_remote_timeout(args))
+        except subprocess.TimeoutExpired:
+            result = _timeout_completed_process(["ssh", args.remote_host, command], _remote_timeout(args))
         handle.write(result.stdout or "")
         handle.write(result.stderr or "")
 
-    state_result = _ssh(args.remote_host, f"cat {_remote_quote(_remote_join(remote_iter_dir, 'run_state.json'))} 2>/dev/null || true")
+    try:
+        state_result = _ssh(
+            args.remote_host,
+            f"cat {_remote_quote(_remote_join(remote_iter_dir, 'run_state.json'))} 2>/dev/null || true",
+            timeout=_remote_timeout(args),
+        )
+    except subprocess.TimeoutExpired:
+        state_result = _timeout_completed_process(
+            ["ssh", args.remote_host, "cat run_state.json"],
+            _remote_timeout(args),
+        )
     batch_state: dict[str, Any] = {}
     if state_result.stdout.strip():
         try:
@@ -1193,10 +1425,17 @@ def call_ssh_remote_batch(
             write_json(iteration_dir / "remote_run_state.json", batch_state)
         except json.JSONDecodeError:
             batch_state = {}
-    summary_result = _ssh(
-        args.remote_host,
-        f"cat {_remote_quote(_remote_join(remote_iter_dir, 'comparison_summary.json'))} 2>/dev/null || true",
-    )
+    try:
+        summary_result = _ssh(
+            args.remote_host,
+            f"cat {_remote_quote(_remote_join(remote_iter_dir, 'comparison_summary.json'))} 2>/dev/null || true",
+            timeout=_remote_timeout(args),
+        )
+    except subprocess.TimeoutExpired:
+        summary_result = _timeout_completed_process(
+            ["ssh", args.remote_host, "cat comparison_summary.json"],
+            _remote_timeout(args),
+        )
     if summary_result.stdout.strip():
         try:
             comparison_summary = json.loads(summary_result.stdout)
@@ -1206,8 +1445,11 @@ def call_ssh_remote_batch(
             pass
     batch_state.setdefault("remote_host", args.remote_host)
     batch_state.setdefault("remote_run_dir", remote_iter_dir)
+    batch_state["candidate_replication_detected"] = candidate_replication_detected
     if remote_ws:
         batch_state.setdefault("remote_candidate_workspace", remote_ws)
+    if remote_control_ws:
+        batch_state.setdefault("remote_control_workspace", remote_control_ws)
     return result.returncode, iteration_dir, batch_state
 
 
@@ -1394,6 +1636,24 @@ def _twap_batch_stats(batch_state: dict[str, Any]) -> dict[str, Any]:
         "max_normal_regression_ms_text": f"{max_normal:.3f}",
         "max_stress_regression_ms_text": f"{max_stress:.3f}",
     }
+
+
+def _infra_failure_mode(batch_state: dict[str, Any], rc: int) -> str:
+    for field in ("failure_mode", "timing_status", "timing_verdict", "reason"):
+        raw = str(batch_state.get(field) or "")
+        for mode in INFRA_FAILURES:
+            if mode in raw:
+                return mode
+    build = str(batch_state.get("build_status") or "").lower()
+    compare = str(batch_state.get("compare_status") or "").lower()
+    timing = str(batch_state.get("timing_status") or "").lower()
+    if build in {"failed", "not_run"}:
+        return "build_failed" if build == "failed" else (timing or "remote_state_unavailable")
+    if compare == "not_run" or timing in INFRA_FAILURES:
+        return timing or "remote_state_unavailable"
+    if rc == 124:
+        return "remote_timeout"
+    return ""
 
 
 def record_attempt(
@@ -1777,12 +2037,17 @@ def judge_verdict(batch_state: dict[str, Any]) -> tuple[str, str]:
 
     noise_flag = (batch_state.get("noise_flag") or "").upper()
     timing = (batch_state.get("timing_verdict") or batch_state.get("timing_status") or "").lower()
+    if timing.startswith("accepted") and batch_state.get("remote_candidate_workspace"):
+        if str(batch_state.get("control_source_kind") or "") != "synced_same_source":
+            return "needs_paired_evidence", "synced candidate acceptance requires synced same-source control build"
     if timing == "accepted_noisy_replicated":
         return "accepted_noisy_replicated", "statistically conclusive with replicated evidence; shared-host promotion, artifact marked non-bare-metal"
     if timing == "accepted_noisy_single":
         return "accepted_noisy_single", "statistically conclusive but measurement environment was noisy; single-run evidence only, queued for validation"
     if timing == "accepted_class_a":
         return "accepted_class_a", "Class A algorithmic change: correctness pass is sufficient; perf recorded but not gated."
+    if timing in {"needs_paired_evidence", "screening_only"}:
+        return timing, batch_state.get("paired_evidence_reason", "") or "paired A/B evidence is missing or screening-only"
     if noise_flag == "NOISY" or timing == "noisy_pending":
         return (
             "NOISY_PENDING",
@@ -1822,6 +2087,9 @@ def write_run_state(
     accepted_class_a_count: int = 0,
     accepted_noisy_single_count: int = 0,
     accepted_noisy_replicated_count: int = 0,
+    needs_paired_evidence_count: int = 0,
+    screening_only_count: int = 0,
+    candidate_replication_detected: bool = False,
 ) -> None:
     lane_counts = {lane: len(lanes_snapshot.get(lane, [])) for lane in LANE_PRIORITY}
     state = {
@@ -1845,6 +2113,9 @@ def write_run_state(
         "accepted_class_a_count": accepted_class_a_count,
         "accepted_noisy_single_count": accepted_noisy_single_count,
         "accepted_noisy_replicated_count": accepted_noisy_replicated_count,
+        "needs_paired_evidence_count": needs_paired_evidence_count,
+        "screening_only_count": screening_only_count,
+        "candidate_replication_detected": candidate_replication_detected,
         "first_accepted_stop": first_accepted_stop,
         "infra_failure_count": infra_failures,
         "last_exit_reason": stop_reason,
@@ -2027,6 +2298,21 @@ def iteration_step(
     if rc != 0 and not args.dry_run:
         if batch_state:
             retry_condition = str(batch_state.get("reason") or batch_state.get("timing_status") or f"remote rc={rc}")
+            infra_mode = _infra_failure_mode(batch_state, rc)
+            if infra_mode:
+                batch_state["timing_verdict"] = infra_mode
+                record_attempt(
+                    run_dir,
+                    iteration=iteration,
+                    candidate=candidate,
+                    batch_state=batch_state,
+                    verdict="infra_blocked",
+                    retry_condition=retry_condition,
+                    stop_reason=infra_mode,
+                    notes="remote infrastructure failure before candidate timing verdict",
+                )
+                set_patch_status(run_dir, candidate["candidate_id"], "failed", note=retry_condition)
+                return candidate, "infra_blocked", "remote_failed", lanes, batch_state
             if batch_state.get("build_status") == "pass" and not batch_state.get("compare_status"):
                 batch_state["compare_status"] = "pass"
             if not batch_state.get("timing_verdict"):
@@ -2045,7 +2331,7 @@ def iteration_step(
             return candidate, "rejected", "", lanes, batch_state
         # No remote state was recoverable; treat this as infrastructure.
         set_patch_status(run_dir, candidate["candidate_id"], "failed", note=f"remote rc={rc}")
-        return candidate, "rejected", "remote_failed", lanes, batch_state
+        return candidate, "infra_blocked", "remote_failed", lanes, batch_state
 
     verdict, retry_condition = judge_verdict(batch_state)
     if verdict == "neutral":
@@ -2097,6 +2383,8 @@ def iteration_step(
         set_patch_status(run_dir, candidate["candidate_id"], "reverted", note="rejected; reverted")
     elif verdict == "infra_blocked":
         set_patch_status(run_dir, candidate["candidate_id"], "reverted", note=f"infra blocked; {retry_condition}")
+    elif verdict in {"needs_paired_evidence", "screening_only"}:
+        set_patch_status(run_dir, candidate["candidate_id"], "reverted", note=retry_condition)
 
     attempt_stop_reason = "control_baseline_unhealthy" if verdict == "infra_blocked" else ""
     record_attempt(
@@ -2143,8 +2431,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-compare-runs",
         type=int,
-        default=0,
-        help="Measured no_compare smoke runs before compare; 0 preserves legacy behavior by using --measure-runs.",
+        default=1,
+        help="Measured no_compare smoke runs before compare. Defaults to 1 so promotion m24 does not spend 24 candidate-only runs.",
+    )
+    parser.add_argument(
+        "--remote-timeout-seconds",
+        type=int,
+        default=14400,
+        help="Per remote batch/scp/ssh timeout. Prevents a single iteration from hanging past --max-hours.",
     )
     parser.add_argument("--first-accepted-stop", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--repeated-infra-failures", type=int, default=2)
@@ -2168,6 +2462,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reuse-candidate-workspace", action="store_true", help="Skip workspace refresh if it already exists.")
     parser.add_argument("--candidate-ledger", default="", help="Optional JSON ledger of blocked, retry-only, and non-retry Psi candidates/classes.")
     parser.add_argument("--candidate-seed-file", default="", help="Optional JSON file containing explicit candidate lanes for non-Psi adapters such as TWAP.")
+    parser.add_argument("--replication-history", default="", help="Optional timing_history.tsv from a prior independent run used to verify replicated evidence.")
     parser.add_argument("--control-root", default="", help="Optional control source root for non-Psi batch scripts such as TWAP.")
     parser.add_argument("--twap-endpoint", default="", help="TWAP gRPC endpoint passed to twap_headless_remote.sh.")
     parser.add_argument("--twap-user-id", default="", help="TWAP userId passed to twap_headless_remote.sh.")
@@ -2186,8 +2481,19 @@ def resolve_stop_file(run_dir: Path, stop_file: str | None) -> Path:
     return run_dir / "STOP"
 
 
-def count_verdict_rows(run_dir: Path) -> tuple[int, int, int, int, int, int, int, int]:
-    counts = {"accepted": 0, "accepted_noisy_single": 0, "accepted_noisy_replicated": 0, "accepted_class_a": 0, "neutral": 0, "rejected": 0, "NOISY_PENDING": 0, "infra_blocked": 0}
+def count_verdict_rows(run_dir: Path) -> tuple[int, int, int, int, int, int, int, int, int, int]:
+    counts = {
+        "accepted": 0,
+        "accepted_noisy_single": 0,
+        "accepted_noisy_replicated": 0,
+        "accepted_class_a": 0,
+        "neutral": 0,
+        "rejected": 0,
+        "NOISY_PENDING": 0,
+        "infra_blocked": 0,
+        "needs_paired_evidence": 0,
+        "screening_only": 0,
+    }
     for row in read_tsv(run_dir / "attempts.tsv"):
         verdict = (row.get("verdict") or "").strip()
         if verdict in counts:
@@ -2203,6 +2509,8 @@ def count_verdict_rows(run_dir: Path) -> tuple[int, int, int, int, int, int, int
         accepted_noisy,
         counts["accepted_class_a"],
         counts["accepted_noisy_replicated"],
+        counts["needs_paired_evidence"],
+        counts["screening_only"],
     )
 
 
@@ -2212,12 +2520,16 @@ def main() -> int:
         raise SystemExit("--max-iterations must be >= 1")
     if args.max_hours <= 0:
         raise SystemExit("--max-hours must be > 0")
-    if args.no_compare_runs <= 0:
+    if args.no_compare_runs < 0:
         args.no_compare_runs = args.measure_runs
+    if args.remote_timeout_seconds <= 0:
+        raise SystemExit("--remote-timeout-seconds must be > 0")
     if args.candidate_ledger:
         args.candidate_ledger = str(Path(args.candidate_ledger).resolve())
     if args.candidate_seed_file:
         args.candidate_seed_file = str(Path(args.candidate_seed_file).resolve())
+    if args.replication_history:
+        args.replication_history = str(Path(args.replication_history).resolve())
         if not Path(args.candidate_seed_file).exists():
             raise SystemExit(f"--candidate-seed-file does not exist: {args.candidate_seed_file}")
 
@@ -2253,10 +2565,12 @@ def main() -> int:
     )
 
     prior_attempts = read_tsv(run_dir / "attempts.tsv")
+    non_consuming_verdicts = {"infra_blocked", "needs_paired_evidence", "screening_only"}
     seen_ids: set[str] = {
         (row.get("candidate_id") or "").strip()
         for row in prior_attempts
         if (row.get("candidate_id") or "").strip()
+        and (row.get("verdict") or "").strip() not in non_consuming_verdicts
     }
     cooldown_targets = {(row.get("target") or "").strip() for row in read_tsv(run_dir / "cooldown.tsv")}
     cooldown_targets.discard("")
@@ -2307,8 +2621,6 @@ def main() -> int:
 
         latest_candidate = candidate
         latest_verdict = verdict
-        seen_ids.add(candidate["candidate_id"])
-        candidates_tried += 1
 
         if iter_stop == "remote_failed":
             infra_failures += 1
@@ -2316,14 +2628,29 @@ def main() -> int:
                 stop_reason = "repeated_infra_failure"
                 stop_detail = f"{infra_failures} consecutive infrastructure failures"
                 break
-            # candidate-level skip; continue
+            # Infrastructure did not test the candidate. Do not consume it as
+            # seen and do not count it against candidate budget.
             continue
+
+        seen_ids.add(candidate["candidate_id"])
+        candidates_tried += 1
         if iter_stop == "control_baseline_unhealthy":
             stop_reason = "control_baseline_unhealthy"
             stop_detail = f"candidate {candidate['candidate_id']} stopped because TWAP control baseline lost pushes"
             break
 
-        accepted_clean, neutral, rejected, noisy, infra_blocked, accepted_noisy, accepted_class_a, accepted_noisy_replicated = count_verdict_rows(run_dir)
+        (
+            accepted_clean,
+            neutral,
+            rejected,
+            noisy,
+            infra_blocked,
+            accepted_noisy,
+            accepted_class_a,
+            accepted_noisy_replicated,
+            needs_paired_evidence,
+            screening_only,
+        ) = count_verdict_rows(run_dir)
         write_run_state(
             run_dir,
             status="running",
@@ -2345,6 +2672,8 @@ def main() -> int:
             accepted_class_a_count=accepted_class_a,
             accepted_noisy_single_count=accepted_noisy - accepted_noisy_replicated,
             accepted_noisy_replicated_count=accepted_noisy_replicated,
+            needs_paired_evidence_count=needs_paired_evidence,
+            screening_only_count=screening_only,
         )
         update_heartbeat(
             run_dir,
@@ -2361,7 +2690,18 @@ def main() -> int:
         stop_reason = "budget_stop"
         stop_detail = "max-iterations exhausted without an explicit stop"
 
-    accepted_clean, neutral, rejected, noisy, infra_blocked, accepted_noisy, accepted_class_a, accepted_noisy_replicated = count_verdict_rows(run_dir)
+    (
+        accepted_clean,
+        neutral,
+        rejected,
+        noisy,
+        infra_blocked,
+        accepted_noisy,
+        accepted_class_a,
+        accepted_noisy_replicated,
+        needs_paired_evidence,
+        screening_only,
+    ) = count_verdict_rows(run_dir)
     write_run_state(
         run_dir,
         status="stopped",
@@ -2383,6 +2723,8 @@ def main() -> int:
         accepted_class_a_count=accepted_class_a,
         accepted_noisy_single_count=accepted_noisy - accepted_noisy_replicated,
         accepted_noisy_replicated_count=accepted_noisy_replicated,
+        needs_paired_evidence_count=needs_paired_evidence,
+        screening_only_count=screening_only,
     )
     update_heartbeat(run_dir, "stopped", stop_detail)
 
@@ -2397,6 +2739,8 @@ def main() -> int:
     print(f"infra_blocked={infra_blocked}")
     print(f"accepted_noisy={accepted_noisy}")
     print(f"accepted_noisy_replicated={accepted_noisy_replicated}")
+    print(f"needs_paired_evidence={needs_paired_evidence}")
+    print(f"screening_only={screening_only}")
     print(f"patch_manifest_path={run_dir / 'patches' / 'patch_manifest.json'}")
     return 0 if stop_reason in {"accepted", "budget_stop", "convergence_proven", "no_targets"} else 1
 

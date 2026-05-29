@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
@@ -131,10 +132,10 @@ class PerfValidationLockLocalTests(unittest.TestCase):
         self.assertIn("hostname", data)
         self.assertEqual(data["owner_command"], "bash scripts/psi_headless_remote.sh")
 
-    # -- stale lock: conservative, no auto-deletion --
+    # -- stale lock recovery --
 
-    def test_no_auto_stale_removal(self) -> None:
-        """A stale lock must never be auto-deleted.  Manual cleanup only."""
+    def test_stale_same_host_dead_pid_is_recovered(self) -> None:
+        """A stale same-host lock with a dead pid should be removed and reacquired."""
         # Write a lock file by hand that looks stale.
         stale_data = {
             "run_id": "old_stale_run",
@@ -143,21 +144,48 @@ class PerfValidationLockLocalTests(unittest.TestCase):
             "timestamp": "2025-01-01T00:00:00Z",
             "owner_command": "bash test.sh",
             "pid": 99999,
-            "hostname": "devbox",
+            "hostname": lock_mod.hostname(),
         }
         Path(self.lock_path).parent.mkdir(parents=True, exist_ok=True)
         Path(self.lock_path).write_text(json.dumps(stale_data), encoding="utf-8")
 
-        # Try to acquire -- must be blocked, not auto-deleted.
-        result = lock_mod.acquire_lock(
-            self.lock_path,
-            run_id="new_run",
-            script_name="psi_headless_remote.sh",
-        )
-        self.assertFalse(result["acquired"])
-        self.assertEqual(result["lock_data"]["run_id"], "old_stale_run")
-        # Stale lock must still exist.
+        def fake_remove_stale(lock_path: str, _lock_data: dict, _reason: str) -> bool:
+            Path(lock_path).unlink(missing_ok=True)
+            return True
+
+        with mock.patch.object(lock_mod, "_remove_stale_lock", side_effect=fake_remove_stale):
+            result = lock_mod.acquire_lock(
+                self.lock_path,
+                run_id="new_run",
+                script_name="psi_headless_remote.sh",
+            )
+        self.assertTrue(result["acquired"])
+        self.assertEqual(result["lock_data"]["run_id"], "new_run")
         self.assertTrue(Path(self.lock_path).exists())
+
+    def test_old_same_host_live_pid_is_not_recovered_by_age(self) -> None:
+        """A live same-host holder must not be stolen only because it is old."""
+        stale_data = {
+            "run_id": "old_live_run",
+            "script_name": "test.sh",
+            "candidate_id": "",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "owner_command": "bash test.sh",
+            "pid": 12345,
+            "hostname": lock_mod.hostname(),
+        }
+        Path(self.lock_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(self.lock_path).write_text(json.dumps(stale_data), encoding="utf-8")
+
+        with mock.patch.object(lock_mod, "_pid_alive", return_value=True):
+            result = lock_mod.acquire_lock(
+                self.lock_path,
+                run_id="new_run",
+                script_name="psi_headless_remote.sh",
+            )
+
+        self.assertFalse(result["acquired"])
+        self.assertEqual(result["lock_data"]["run_id"], "old_live_run")
 
     # -- corrupt lock file --
 

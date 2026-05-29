@@ -2,10 +2,13 @@
 set -u
 
 ROOT="${ROOT:-/root/work/Code1/psi-trader-liangjunming}"
+CONTROL_ROOT="${CONTROL_ROOT:-}"
 ENV_FILE="${ENV_FILE:-/root/work/.toolchain/psi-env.sh}"
 RUN_ID="${RUN_ID:-headless_psi_$(date +%Y%m%d_%H%M%S)}"
 RUN_DIR="${RUN_DIR:-$ROOT/headless_runs/$RUN_ID}"
 BUILD_DIR="${BUILD_DIR:-$ROOT/build/linux-relwithdebinfo-boost182}"
+CONTROL_BUILD_DIR="${CONTROL_BUILD_DIR:-}"
+RUNNER_WAS_SET="${RUNNER+x}"
 RUNNER="${RUNNER:-$BUILD_DIR/build_x64/RelWithDebInfo/bin/PsiTraderRunner/PsiTraderRunner}"
 CONFIG="${CONFIG:-$ROOT/PsiTraderRunner/config.yaml}"
 OUTPUT_DIR="${OUTPUT_DIR:-/root/work/Code1/dataset/output}"
@@ -15,8 +18,10 @@ REPORT_ROOT="${REPORT_ROOT:-$RUN_DIR/reports}"
 GENERATE_REPORT="${GENERATE_REPORT:-0}"
 HEADLESS_CONTROL_DIR="$RUN_DIR"
 MEASURE_RUNS="${MEASURE_RUNS:-5}"
-NO_COMPARE_RUNS="${NO_COMPARE_RUNS:-$MEASURE_RUNS}"
+NO_COMPARE_RUNS="${NO_COMPARE_RUNS:-1}"
 CANDIDATE_RUNNER="${CANDIDATE_RUNNER:-}"
+CONTROL_SOURCE_KIND="${CONTROL_SOURCE_KIND:-existing_runner}"
+CONTROL_CONFIG=""
 
 mkdir -p "$RUN_DIR"
 mkdir -p "$RUN_DIR/logs" "$RUN_DIR/reports" "$RUN_DIR/patches"
@@ -33,6 +38,15 @@ sync_log_artifacts() {
     summary.txt \
     build.log \
     build_tail.txt \
+    control_build.log \
+    control_build_tail.txt \
+    control_configure.log \
+    control_configure_tail.txt \
+    candidate_build.log \
+    candidate_build_tail.txt \
+    candidate_configure.log \
+    candidate_configure_tail.txt \
+    build_identity.txt \
     current_no_compare.txt \
     current_compare.txt \
     report.log \
@@ -105,6 +119,27 @@ stage_runtime_config() {
   CONFIG="$runtime_config"
 }
 
+stage_control_runtime_config() {
+  CONTROL_CONFIG="$CONFIG"
+  if [ -z "$CONTROL_ROOT" ]; then
+    return 0
+  fi
+  local requested_config="$CONFIG"
+  local runtime_config="$CONTROL_ROOT/PsiTraderRunner/config.yaml"
+  if [ ! -f "$requested_config" ]; then
+    log "ERROR CONFIG missing for control: $requested_config"
+    write_failure_state "missing_config" "not_run" "not_run" "not_run"
+    sync_log_artifacts
+    exit 1
+  fi
+  mkdir -p "$(dirname "$runtime_config")"
+  if [ "$(readlink -f "$requested_config")" != "$(readlink -f "$runtime_config" 2>/dev/null || echo "$runtime_config")" ]; then
+    cp -f "$requested_config" "$runtime_config"
+    log "staged control runtime config from $requested_config to $runtime_config"
+  fi
+  CONTROL_CONFIG="$runtime_config"
+}
+
 set_compare() {
   local value="$1"
   if grep -q "isCompareFile: true" "$CONFIG"; then
@@ -113,6 +148,26 @@ set_compare() {
     sed -i "s/isCompareFile: false/isCompareFile: $value/" "$CONFIG"
   else
     log "WARN missing isCompareFile in config"
+  fi
+}
+
+set_compare_file() {
+  local target_config="$1"
+  local value="$2"
+  if grep -q "isCompareFile: true" "$target_config"; then
+    sed -i "s/isCompareFile: true/isCompareFile: $value/" "$target_config"
+  elif grep -q "isCompareFile: false" "$target_config"; then
+    sed -i "s/isCompareFile: false/isCompareFile: $value/" "$target_config"
+  else
+    log "WARN missing isCompareFile in $target_config"
+  fi
+}
+
+set_all_compare() {
+  local value="$1"
+  set_compare_file "$CONFIG" "$value"
+  if [ -n "$CONTROL_CONFIG" ] && [ "$CONTROL_CONFIG" != "$CONFIG" ]; then
+    set_compare_file "$CONTROL_CONFIG" "$value"
   fi
 }
 
@@ -144,6 +199,19 @@ prepare_runtime_log_dir() {
   fi
 }
 
+prepare_control_runtime_log_dir() {
+  if [ -z "$CONTROL_ROOT" ]; then
+    return 0
+  fi
+  local today runner_log_dir
+  today="$(date +%Y%m%d)"
+  runner_log_dir="$CONTROL_ROOT/PsiTraderRunner/log/$today"
+  if ! mkdir -p "$runner_log_dir"; then
+    log "ERROR failed to prepare control runtime log dir: $runner_log_dir"
+    return 1
+  fi
+}
+
 run_runner() {
   local label="$1"
   local log_file="$2"
@@ -152,7 +220,11 @@ run_runner() {
   local pair_index="${5:-}"
   local start_ms end_ms rc elapsed_ms elapsed_seconds compat_seconds
   start_ms=$(now_ms)
-  (cd "$ROOT/PsiTraderRunner" && "$RUNNER" > "$log_file" 2>&1)
+  if [ -n "$CONTROL_ROOT" ]; then
+    (cd "$CONTROL_ROOT/PsiTraderRunner" && "$RUNNER" > "$log_file" 2>&1)
+  else
+    (cd "$ROOT/PsiTraderRunner" && "$RUNNER" > "$log_file" 2>&1)
+  fi
   rc=$?
   end_ms=$(now_ms)
   elapsed_ms=$((end_ms - start_ms))
@@ -1098,6 +1170,13 @@ comparison_summary = {
     "recorded_at": recorded_at,
     "host_key": host_key,
     "control_head": control_head,
+    "control_source_kind": os.environ.get("CONTROL_SOURCE_KIND", "existing_runner"),
+    "control_root": os.environ.get("CONTROL_ROOT", ""),
+    "candidate_root": os.environ.get("ROOT", ""),
+    "control_build_dir": os.environ.get("CONTROL_BUILD_DIR", ""),
+    "candidate_build_dir": os.environ.get("BUILD_DIR", ""),
+    "control_runner": os.environ.get("RUNNER", ""),
+    "candidate_runner": os.environ.get("CANDIDATE_RUNNER", ""),
     "active_gate": "headless remote batch",
     "control_role": "old_control",
     "candidate_role": "accepted_candidate" if accepted_attempt_rows else "screening_candidate",
@@ -1201,6 +1280,13 @@ run_state = {
     "started_at": recorded_at,
     "updated_at": recorded_at,
     "control_head": control_head,
+    "control_source_kind": os.environ.get("CONTROL_SOURCE_KIND", "existing_runner"),
+    "control_root": os.environ.get("CONTROL_ROOT", ""),
+    "candidate_root": os.environ.get("ROOT", ""),
+    "control_build_dir": os.environ.get("CONTROL_BUILD_DIR", ""),
+    "candidate_build_dir": os.environ.get("BUILD_DIR", ""),
+    "control_runner": os.environ.get("RUNNER", ""),
+    "candidate_runner": os.environ.get("CANDIDATE_RUNNER", ""),
     "active_gate": "headless remote batch",
     "iteration": int(no_compare_count),
     "accepted_count": 0,
@@ -1296,47 +1382,86 @@ fi
 trap 'release_validation_lock' EXIT
 
 stage_runtime_config
-set_compare false
+stage_control_runtime_config
+set_all_compare false
 grep "isCompareFile" "$CONFIG" | tee -a "$RUN_DIR/summary.txt"
 if ! prepare_runtime_log_dir; then
   write_failure_state "runtime_log_dir_failed" "not_run" "not_run" "not_run"
   sync_log_artifacts
   exit 1
 fi
-
-log "building"
-if [ ! -f "$BUILD_DIR/CMakeCache.txt" ]; then
-  log "configuring build dir: $BUILD_DIR"
-  mkdir -p "$BUILD_DIR"
-  configure_status=0
-  if [ -n "${CMAKE_CONFIGURE_FLAGS:-}" ]; then
-    # Intentionally split extra CMake flags on shell words; callers must avoid
-    # spaces inside individual -D values.
-    # shellcheck disable=SC2086
-    (cd "$ROOT" && cmake -S "$ROOT" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-RelWithDebInfo}" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON $CMAKE_CONFIGURE_FLAGS > "$RUN_DIR/configure.log" 2>&1) || configure_status=$?
-  else
-    (cd "$ROOT" && cmake -S "$ROOT" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-RelWithDebInfo}" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON > "$RUN_DIR/configure.log" 2>&1) || configure_status=$?
-  fi
-  if [ "$configure_status" -ne 0 ]; then
-    log "ERROR configure failed"
-    tail -80 "$RUN_DIR/configure.log" > "$RUN_DIR/configure_tail.txt"
-    write_failure_state "configure_failed" "failed" "not_run" "not_run"
-    sync_log_artifacts
-    exit 1
-  fi
-  log "configure passed"
-fi
-if ! (cd "$ROOT" && cmake --build "$BUILD_DIR" -j2 > "$RUN_DIR/build.log" 2>&1); then
-  log "ERROR build failed"
-  tail -80 "$RUN_DIR/build.log" > "$RUN_DIR/build_tail.txt"
-  write_failure_state "build_failed" "failed" "not_run" "not_run"
+if ! prepare_control_runtime_log_dir; then
+  write_failure_state "runtime_log_dir_failed" "not_run" "not_run" "not_run"
   sync_log_artifacts
   exit 1
 fi
-log "build passed"
+
+if [ -n "$CONTROL_ROOT" ] && [ -z "$CONTROL_BUILD_DIR" ]; then
+  CONTROL_BUILD_DIR="$CONTROL_ROOT/build/linux-relwithdebinfo-boost182"
+fi
+if [ -n "$CONTROL_ROOT" ] && [ -z "$RUNNER_WAS_SET" ]; then
+  RUNNER="$CONTROL_BUILD_DIR/build_x64/RelWithDebInfo/bin/PsiTraderRunner/PsiTraderRunner"
+fi
+
+build_root() {
+  local role="$1"
+  local root="$2"
+  local build_dir="$3"
+  local configure_log="$RUN_DIR/${role}_configure.log"
+  local build_log="$RUN_DIR/${role}_build.log"
+  local configure_status=0
+  if [ ! -f "$build_dir/CMakeCache.txt" ]; then
+    log "configuring $role build dir: $build_dir"
+    mkdir -p "$build_dir"
+    configure_status=0
+    if [ -n "${CMAKE_CONFIGURE_FLAGS:-}" ]; then
+      # Intentionally split extra CMake flags on shell words; callers must avoid
+      # spaces inside individual -D values.
+      # shellcheck disable=SC2086
+      (cd "$root" && cmake -S "$root" -B "$build_dir" -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-RelWithDebInfo}" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON $CMAKE_CONFIGURE_FLAGS > "$configure_log" 2>&1) || configure_status=$?
+    else
+      (cd "$root" && cmake -S "$root" -B "$build_dir" -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-RelWithDebInfo}" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON > "$configure_log" 2>&1) || configure_status=$?
+    fi
+    if [ "$configure_status" -ne 0 ]; then
+      log "ERROR $role configure failed"
+      tail -80 "$configure_log" > "$RUN_DIR/${role}_configure_tail.txt"
+      write_failure_state "configure_failed" "failed" "not_run" "not_run"
+      sync_log_artifacts
+      exit 1
+    fi
+    log "$role configure passed"
+  fi
+  if ! (cd "$root" && cmake --build "$build_dir" -j2 > "$build_log" 2>&1); then
+    log "ERROR $role build failed"
+    tail -80 "$build_log" > "$RUN_DIR/${role}_build_tail.txt"
+    write_failure_state "build_failed" "failed" "not_run" "not_run"
+    sync_log_artifacts
+    exit 1
+  fi
+  log "$role build passed"
+}
+
+log "building"
+if [ -n "$CONTROL_ROOT" ]; then
+  build_root "control" "$CONTROL_ROOT" "$CONTROL_BUILD_DIR"
+fi
+build_root "candidate" "$ROOT" "$BUILD_DIR"
+if [ -n "$CONTROL_ROOT" ]; then
+  {
+    echo "control_source_kind=$CONTROL_SOURCE_KIND"
+    echo "control_root=$CONTROL_ROOT"
+    echo "candidate_root=$ROOT"
+    echo "control_build_dir=$CONTROL_BUILD_DIR"
+    echo "candidate_build_dir=$BUILD_DIR"
+    echo "control_runner=$RUNNER"
+    echo "candidate_runner=$CANDIDATE_RUNNER"
+    echo "control_head=$(cd "$CONTROL_ROOT" && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    echo "candidate_head=$(cd "$ROOT" && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  } | tee "$RUN_DIR/build_identity.txt"
+fi
 
 log "running current-safe no_compare"
-set_compare false
+set_all_compare false
 : > "$RUN_DIR/current_no_compare.txt"
 measured_labels=()
 for index in $(seq 1 "$NO_COMPARE_RUNS"); do
@@ -1378,7 +1503,7 @@ fi
 find "$OUTPUT_DIR" -name "*.parquet" | wc -l | awk '{print "output_parquet_count="$1}' | tee -a "$RUN_DIR/current_no_compare.txt"
 
 log "running candidate compare"
-set_compare true
+set_all_compare true
 compare_runner_role="control"
 compare_runner_path="$RUNNER"
 if [ -n "$CANDIDATE_RUNNER" ] && [ -x "$CANDIDATE_RUNNER" ]; then
@@ -1399,7 +1524,7 @@ else
     compare_rc=$?
   fi
 fi
-set_compare false
+set_all_compare false
 compare_log_error_count=$(count_runner_failure_markers "$RUN_DIR/compare.log")
 if [ "$compare_log_error_count" -ne 0 ]; then
   compare_rc=1
@@ -1423,7 +1548,7 @@ if [ "$compare_rc" -ne 0 ]; then
 elif [ -n "$CANDIDATE_RUNNER" ]; then
   if [ -x "$CANDIDATE_RUNNER" ]; then
     log "running interleaved paired A/B (control=$RUNNER, candidate=$CANDIDATE_RUNNER)"
-    set_compare false
+    set_all_compare false
     for pair_index in $(seq 1 "$MEASURE_RUNS"); do
       paired_ctrl_label="paired_ctrl_$pair_index"
       paired_cand_label="paired_cand_$pair_index"
@@ -1449,7 +1574,11 @@ fi
 
 control_head="${CONTROL_HEAD:-}"
 if [ -z "$control_head" ]; then
-  control_head=$(cd "$ROOT" && git rev-parse --short HEAD 2>/dev/null || echo "headless_psi_remote")
+  control_head_root="$ROOT"
+  if [ -n "$CONTROL_ROOT" ]; then
+    control_head_root="$CONTROL_ROOT"
+  fi
+  control_head=$(cd "$control_head_root" && git rev-parse --short HEAD 2>/dev/null || echo "headless_psi_remote")
 fi
 control_samples_ms=$(awk -F '\t' 'NR > 1 && $2=="no_compare" && $3=="measured" && $7=="0" { printf "%s%s", sep, $4; sep="," } END { print "" }' "$RUN_DIR/timing_samples.tsv")
 control_samples_seconds=$(awk -F '\t' 'NR > 1 && $2=="no_compare" && $3=="measured" && $7=="0" { printf "%s%s", sep, $5; sep="," } END { print "" }' "$RUN_DIR/timing_samples.tsv")
@@ -1490,10 +1619,14 @@ else
 fi
 
 log "running perf evidence"
-set_compare false
+set_all_compare false
+perf_root="$ROOT"
+if [ -n "$CONTROL_ROOT" ]; then
+  perf_root="$CONTROL_ROOT"
+fi
 if command -v perf >/dev/null 2>&1; then
-  (cd "$ROOT/PsiTraderRunner" && perf stat -d -o "$RUN_DIR/perf_stat.txt" "$RUNNER" > "$RUN_DIR/perf_runner.log" 2>&1) || log "WARN perf stat failed"
-  (cd "$ROOT/PsiTraderRunner" && perf record -F 99 -g -o "$RUN_DIR/perf.data" "$RUNNER" > "$RUN_DIR/perf_record_runner.log" 2>&1) || log "WARN perf record failed"
+  (cd "$perf_root/PsiTraderRunner" && perf stat -d -o "$RUN_DIR/perf_stat.txt" "$RUNNER" > "$RUN_DIR/perf_runner.log" 2>&1) || log "WARN perf stat failed"
+  (cd "$perf_root/PsiTraderRunner" && perf record -F 99 -g -o "$RUN_DIR/perf.data" "$RUNNER" > "$RUN_DIR/perf_record_runner.log" 2>&1) || log "WARN perf record failed"
   perf report -i "$RUN_DIR/perf.data" --stdio > "$RUN_DIR/perf_report.txt" 2> "$RUN_DIR/perf_report.err" || log "WARN perf report failed"
 else
   log "WARN perf command not available"
