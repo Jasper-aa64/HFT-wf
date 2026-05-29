@@ -25,6 +25,10 @@ TWAP_CORRECTNESS_MODE="${TWAP_CORRECTNESS_MODE:-push_only}"
 TWAP_ACCOUNT_DESC_CHECK="${TWAP_ACCOUNT_DESC_CHECK:-required}"
 MIN_NORMAL_P95_IMPROVEMENT_MS="${MIN_NORMAL_P95_IMPROVEMENT_MS:-1.0}"
 MAX_STRESS_P95_REGRESSION_MS="${MAX_STRESS_P95_REGRESSION_MS:-5.0}"
+# control_source_kind mirrors the psi harness field so the shared judge_verdict
+# gate (synced_workspace + accepted -> requires synced_same_source) works for TWAP.
+# The value is derived at script-top but finalised after main() resolves CONTROL_ROOT.
+CONTROL_SOURCE_KIND="${CONTROL_SOURCE_KIND:-}"
 ACTIVE_RUNNER_ROOT=""
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
@@ -89,6 +93,7 @@ write_state() {
   REASON="$reason" \
   ROOT="$ROOT" \
   CONTROL_ROOT="$CONTROL_ROOT" \
+  CONTROL_SOURCE_KIND="$CONTROL_SOURCE_KIND" \
   RUN_DIR="$RUN_DIR" \
   CANDIDATE_ID="$CANDIDATE_ID" \
   HOST_KEY="$HOST_KEY" \
@@ -105,6 +110,7 @@ payload = {
     "candidate_id": os.environ["CANDIDATE_ID"],
     "root": os.environ["ROOT"],
     "control_root": os.environ["CONTROL_ROOT"],
+    "control_source_kind": os.environ.get("CONTROL_SOURCE_KIND", "existing_runner"),
     "run_dir": os.environ["RUN_DIR"],
     "host_key": os.environ["HOST_KEY"],
     "endpoint": os.environ["ENDPOINT"],
@@ -410,6 +416,7 @@ write_summary() {
   CANDIDATE_ID="$CANDIDATE_ID" \
   ROOT="$ROOT" \
   CONTROL_ROOT="$CONTROL_ROOT" \
+  CONTROL_SOURCE_KIND="$CONTROL_SOURCE_KIND" \
   MIN_NORMAL_P95_IMPROVEMENT_MS="$MIN_NORMAL_P95_IMPROVEMENT_MS" \
   MAX_STRESS_P95_REGRESSION_MS="$MAX_STRESS_P95_REGRESSION_MS" \
   python3 - <<'PY' > "$RUN_DIR/comparison_summary.json"
@@ -521,6 +528,7 @@ payload = {
     "candidate_id": os.environ["CANDIDATE_ID"],
     "root": os.environ["ROOT"],
     "control_root": os.environ["CONTROL_ROOT"],
+    "control_source_kind": os.environ.get("CONTROL_SOURCE_KIND", "existing_runner"),
     "build_status": os.environ["BUILD_STATUS"],
     "correctness_status": os.environ["CORRECTNESS_STATUS"],
     "timing_status": os.environ["TIMING_STATUS"],
@@ -544,6 +552,17 @@ PY
 
 main() {
   log "TWAP headless remote start root=$ROOT control_root=$CONTROL_ROOT run_dir=$RUN_DIR"
+
+  # Resolve control_source_kind so write_state/write_summary can emit it.
+  # "synced_same_source" means the controller synced a same-base-commit workspace
+  # for the control build (set by the controller via CONTROL_SOURCE_KIND env var).
+  # If the caller did not set it, derive a default: non-empty CONTROL_ROOT means
+  # the control is built from a provided workspace (treat as synced_same_source only
+  # when CONTROL_SOURCE_KIND was explicitly passed as synced_same_source; otherwise
+  # use "existing_runner" to stay safe for pre-existing callers).
+  if [ -z "$CONTROL_SOURCE_KIND" ]; then
+    CONTROL_SOURCE_KIND="existing_runner"
+  fi
 
   if ! acquire_validation_lock; then
     write_failure "validation_lock_blocked" "not_run" "not_run" "not_run"
