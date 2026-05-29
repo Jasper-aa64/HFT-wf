@@ -11,21 +11,13 @@ from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-WORK_ROOT = REPO_ROOT.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 import psi_headless_auto_loop as auto_loop  # noqa: E402
 
-DRIVER_PATH = (
-    WORK_ROOT
-    / ".trellis"
-    / "tasks"
-    / "05-12-psi_next_candidate_experiment_launch_v2"
-    / "tools"
-    / "run_prepared_candidate.py"
-)
+DRIVER_PATH = REPO_ROOT / "scripts" / "run_prepared_candidate.py"
 SMOKE_DRIVER_PATH = DRIVER_PATH.with_name("run_prepared_replication_smoke.py")
 
 
@@ -118,7 +110,7 @@ class RunPreparedCandidateDriverTests(unittest.TestCase):
             argv = [
                 "run_prepared_candidate.py",
                 "--repo-root",
-                str(WORK_ROOT),
+                str(REPO_ROOT),
                 "--run-dir",
                 str(run_dir),
                 "--source-root",
@@ -166,7 +158,7 @@ class RunPreparedCandidateDriverTests(unittest.TestCase):
             argv = [
                 "run_prepared_candidate.py",
                 "--repo-root",
-                str(WORK_ROOT),
+                str(REPO_ROOT),
                 "--run-dir",
                 str(root / "run"),
                 "--source-root",

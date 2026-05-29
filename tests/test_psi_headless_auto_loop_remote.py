@@ -17,6 +17,21 @@ import psi_headless_auto_loop as auto_loop  # noqa: E402
 
 
 class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
+    def test_global_stop_reasons_contract(self) -> None:
+        self.assertEqual(
+            auto_loop.STOP_REASONS_GLOBAL,
+            {
+                "accepted",
+                "budget_stop",
+                "convergence_proven",
+                "no_targets",
+                "remote_failed",
+                "repeated_infra_failure",
+                "control_baseline_unhealthy",
+                "user_stopped",
+            },
+        )
+
     def test_remote_batch_passes_independent_no_compare_runs(self) -> None:
         with tempfile.TemporaryDirectory(prefix="psi_auto_loop_remote_") as raw_dir:
             run_dir = Path(raw_dir)
