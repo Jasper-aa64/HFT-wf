@@ -232,7 +232,23 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
                 calls.append(command)
                 return subprocess.CompletedProcess(["ssh"], 0, stdout="", stderr="")
 
-            with mock.patch.object(auto_loop, "_ssh", side_effect=fake_ssh):
+            def fake_sync_candidate(
+                _args: object, _run_dir: object, _candidate: dict
+            ) -> tuple[str, str]:
+                # Return a fake remote workspace path without doing real scp.
+                return "/remote/run/candidate_workspaces/candidate", ""
+
+            def fake_sync_control(
+                _args: object, _run_dir: object, _candidate: dict
+            ) -> tuple[str, str]:
+                # Return a fake remote control workspace path without doing real scp.
+                return "/remote/run/candidate_workspaces/candidate_control", ""
+
+            with (
+                mock.patch.object(auto_loop, "_ssh", side_effect=fake_ssh),
+                mock.patch.object(auto_loop, "_sync_candidate_workspace_to_remote", side_effect=fake_sync_candidate),
+                mock.patch.object(auto_loop, "_sync_control_workspace_to_remote", side_effect=fake_sync_control),
+            ):
                 rc, _iter_dir, batch_state = auto_loop.call_ssh_remote_batch(args, run_dir, iteration_dir, candidate, 1)
 
             self.assertEqual(rc, 0)
