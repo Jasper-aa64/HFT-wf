@@ -24,6 +24,11 @@ DEFAULT_BOOTSTRAP_RESAMPLES = 2000
 DEFAULT_PERMUTATION_RESAMPLES = 2000
 DEFAULT_CONFIDENCE = 0.95
 VERDICT_METHOD = "paired_bootstrap_permutation_v1"
+# SNR-native confidence tier constants (B redesign, Option A / CI-native, locked 2026-06-02).
+# decisive_k: CI-widths the margin must clear above delta_min_ms.
+# sign_min: minimum fraction of paired deltas sharing the sign of the median delta.
+DEFAULT_DECISIVE_K = 1.0
+DEFAULT_SIGN_MIN = 0.9
 
 
 @dataclass(frozen=True)
@@ -48,6 +53,13 @@ class PairedTimingEvidence:
     paired_range_ms: float | None
     paired_mean_ms: float | None
     verdict_method: str = VERDICT_METHOD
+    # Confidence tier fields (B redesign, 2026-06-02). Added with defaults so
+    # existing callers that construct PairedTimingEvidence directly are unaffected.
+    confidence_tier_name: str | None = None
+    confidence_margin_ms: float | None = None
+    confidence_ci_width_ms: float | None = None
+    confidence_decisiveness: float | None = None
+    confidence_sign_consistency: float | None = None
 
 
 def _seed_from_parts(*parts: object) -> int:
@@ -193,6 +205,110 @@ def noise_flag_from_paired(
     return "ok"
 
 
+@dataclass(frozen=True)
+class ConfidenceTierResult:
+    """Result of the SNR-native confidence tier assessment (B redesign, 2026-06-02).
+
+    tier: "decisive" | "marginal" | "weak"
+    margin: bootstrap_ci_low_ms - delta_min_ms  (positive = CI floor clears the worthwhile line)
+    ci_width: bootstrap_ci_high_ms - bootstrap_ci_low_ms  (spread already absorbed by the CI)
+    decisiveness: margin / ci_width  (CI-widths of clearance; None when ci_width == 0)
+    sign_consistency: fraction of paired_deltas sharing the sign of median_delta
+    """
+
+    tier: str
+    margin: float | None
+    ci_width: float | None
+    decisiveness: float | None
+    sign_consistency: float | None
+
+
+def confidence_tier(
+    bootstrap_ci_low_ms: float | None,
+    bootstrap_ci_high_ms: float | None,
+    median_delta_ms: float | None,
+    paired_deltas_ms: list[float],
+    permutation_p_value_arg: float | None,
+    *,
+    delta_min_ms: float = 0.0,
+    decisive_k: float = DEFAULT_DECISIVE_K,
+    sign_min: float = DEFAULT_SIGN_MIN,
+) -> ConfidenceTierResult:
+    """SNR-native confidence tier — Option A / CI-native, locked 2026-06-02.
+
+    Replaces the ``noise_flag`` gate in the verdict ladder.  The CI already
+    absorbed the paired-delta spread; requiring ``noise_flag != NOISY`` on top
+    double-taxes the same spread.  This function asks instead: *how many
+    CI-widths does the CI floor sit above the minimum-worthwhile delta?*
+
+    Tier rules (Option A — CI-native; permutation p gates only the marginal tier):
+    - **decisive**: margin > 0  AND  decisiveness >= decisive_k  AND
+                    sign_consistency >= sign_min.
+                    Accepts without replication even on a noisy host.
+    - **marginal**: margin > 0  AND  permutation_p <= 0.05  AND  not decisive.
+                    Requires replication for the upgraded verdict.
+    - **weak**: otherwise (margin <= 0, or p > 0.05, or sign mixed).
+
+    delta_min_ms: minimum worthwhile effect — human-frozen contract value;
+      defaults to 0.0 for backward compatibility.  Mark "→ contract field when
+      A lands" when wiring into the unified scorecard.
+    """
+    if bootstrap_ci_low_ms is None or bootstrap_ci_high_ms is None:
+        return ConfidenceTierResult(
+            tier="weak",
+            margin=None,
+            ci_width=None,
+            decisiveness=None,
+            sign_consistency=None,
+        )
+
+    margin = bootstrap_ci_low_ms - delta_min_ms
+    ci_width = bootstrap_ci_high_ms - bootstrap_ci_low_ms
+
+    # decisiveness = margin / ci_width.  When ci_width == 0 the CI is a point
+    # estimate; store None to signal "degenerate" but treat as >= decisive_k
+    # (zero uncertainty with positive margin is maximally decisive).
+    if ci_width > 0.0:
+        decisiveness: float | None = margin / ci_width
+    elif margin > 0.0:
+        decisiveness = None  # zero-width CI, positive margin → effectively ∞
+    else:
+        decisiveness = 0.0
+
+    # Sign consistency: fraction of deltas sharing the sign of median_delta.
+    if paired_deltas_ms and median_delta_ms is not None and median_delta_ms != 0.0:
+        positive_median = median_delta_ms > 0.0
+        matching = sum(1 for d in paired_deltas_ms if (d > 0.0) == positive_median)
+        sign_consistency: float | None = matching / len(paired_deltas_ms)
+    elif paired_deltas_ms:
+        sign_consistency = 1.0
+    else:
+        sign_consistency = None
+
+    # Tier assignment.
+    decisiveness_ok = decisiveness is None or decisiveness >= decisive_k
+    sign_ok = sign_consistency is not None and sign_consistency >= sign_min
+
+    if margin > 0.0 and decisiveness_ok and sign_ok:
+        tier = "decisive"
+    elif (
+        margin > 0.0
+        and permutation_p_value_arg is not None
+        and permutation_p_value_arg <= 0.05
+    ):
+        tier = "marginal"
+    else:
+        tier = "weak"
+
+    return ConfidenceTierResult(
+        tier=tier,
+        margin=margin,
+        ci_width=ci_width,
+        decisiveness=decisiveness,
+        sign_consistency=sign_consistency,
+    )
+
+
 def format_samples_ms(values_ms: list[float]) -> str:
     return _csv([float(value) for value in values_ms])
 
@@ -220,6 +336,12 @@ def summarize_paired_timing(
     noise_range_ratio: float = DEFAULT_NOISE_RANGE_RATIO,
     noise_stdev_ratio: float = DEFAULT_NOISE_STDEV_RATIO,
     verdict_context: str = "",
+    # B redesign parameters (2026-06-02).  delta_min_ms defaults to None,
+    # meaning "compute as 0.5 % of control median" — mark as "→ contract field
+    # when A (unified scorecard) lands".
+    delta_min_ms: float | None = None,
+    decisive_k: float = DEFAULT_DECISIVE_K,
+    sign_min: float = DEFAULT_SIGN_MIN,
 ) -> PairedTimingEvidence:
     control = [float(value) for value in control_samples_ms]
     candidate = [float(value) for value in candidate_samples_ms]
@@ -267,6 +389,25 @@ def summarize_paired_timing(
         and bootstrap_high_ms <= 0.0
     )
 
+    # SNR-native confidence tier (B redesign, Option A / CI-native, 2026-06-02).
+    # delta_min_ms defaults to 0.5 % of control_median when not supplied.
+    # This will become a human-frozen contract field when the unified scorecard (A) lands.
+    _delta_min = (
+        delta_min_ms
+        if delta_min_ms is not None
+        else (control_median_ms * 0.005 if control_median_ms > 0.0 else 0.0)
+    )
+    ct = confidence_tier(
+        bootstrap_low_ms,
+        bootstrap_high_ms,
+        median_delta_ms,
+        deltas_ms,
+        p_value,
+        delta_min_ms=_delta_min,
+        decisive_k=decisive_k,
+        sign_min=sign_min,
+    )
+
     if not build_pass:
         verdict = "rejected"
         reason = "build failed before paired timing evidence could be trusted."
@@ -292,58 +433,63 @@ def summarize_paired_timing(
         reason = (
             "paired median delta is not positive; candidate is not faster under the interleaved A/B samples."
         )
-    elif (
-        bootstrap_low_ms is not None
-        and bootstrap_low_ms > 0.0
-        and p_value is not None
-        and p_value <= 0.05
-        and noise_flag != "NOISY"
-    ):
+    elif ct.tier == "decisive":
+        # Decisive: CI margin clears delta_min by >= decisive_k widths AND sign-consistent.
+        # noise_flag is retained as a diagnostic field but no longer gates acceptance here.
+        _decisiveness_str = (
+            f"{ct.decisiveness:.3f}" if ct.decisiveness is not None else "∞"
+        )
         verdict = "accepted"
         reason = (
             f"paired median delta={median_delta_ms:.3f}ms against control median {control_median_ms:.3f}ms "
-            f"with bootstrap CI [{bootstrap_low_ms:.3f}, {bootstrap_high_ms:.3f}]ms and permutation p={p_value:.6f}."
+            f"with bootstrap CI [{_format_optional_ms(bootstrap_low_ms)}, {_format_optional_ms(bootstrap_high_ms)}]ms "
+            f"(CI-native decisive: margin={_format_optional_ms(ct.margin)}ms, "
+            f"decisiveness={_decisiveness_str}, "
+            f"sign_consistency={ct.sign_consistency:.2f}); "
+            f"permutation p={_format_optional_ms(p_value) if p_value is not None else 'n/a'} (reported, not gating)."
         )
-    elif (
-        bootstrap_low_ms is not None
-        and bootstrap_low_ms > 0.0
-        and p_value is not None
-        and p_value <= 0.05
-        and noise_flag == "NOISY"
-    ):
+    elif ct.tier == "marginal":
         if replicated:
             verdict = "accepted_noisy_replicated"
             reason = (
                 f"paired median delta={median_delta_ms:.3f}ms against control median {control_median_ms:.3f}ms "
-                f"is statistically conclusive (bootstrap CI [{bootstrap_low_ms:.3f}, {bootstrap_high_ms:.3f}]ms, "
-                f"permutation p={p_value:.6f}) with replicated evidence across multiple locked independent runs; "
+                f"is statistically conclusive (bootstrap CI [{_format_optional_ms(bootstrap_low_ms)}, "
+                f"{_format_optional_ms(bootstrap_high_ms)}]ms, permutation p={p_value:.6f}) "
+                f"with replicated evidence across multiple locked independent runs; "
                 f"measurement environment was noisy (range={_format_optional_ms(paired_range_ms)}ms, "
                 f"stdev={_format_optional_ms(paired_stdev_ms)}ms) but replication supports shared-host promotion; "
                 f"artifact marked non-bare-metal."
             )
         else:
+            _marginal_dec = f"{ct.decisiveness:.3f}" if ct.decisiveness is not None else "0.000"
+            _marginal_sign = f"{ct.sign_consistency:.2f}" if ct.sign_consistency is not None else "0.00"
             verdict = "accepted_noisy_single"
             reason = (
                 f"paired median delta={median_delta_ms:.3f}ms against control median {control_median_ms:.3f}ms "
-                f"is statistically conclusive (bootstrap CI [{bootstrap_low_ms:.3f}, {bootstrap_high_ms:.3f}]ms, "
-                f"permutation p={p_value:.6f}) but the measurement environment was noisy "
-                f"(range={_format_optional_ms(paired_range_ms)}ms, stdev={_format_optional_ms(paired_stdev_ms)}ms); "
+                f"is statistically conclusive (bootstrap CI [{_format_optional_ms(bootstrap_low_ms)}, "
+                f"{_format_optional_ms(bootstrap_high_ms)}]ms, permutation p={p_value:.6f}) "
+                f"but confidence tier is marginal (decisiveness={_marginal_dec} "
+                f"< {decisive_k}, sign_consistency={_marginal_sign}); "
                 f"accepted as evidence only — NOT applied; queued for validation replication."
             )
-    elif noise_flag == "NOISY":
-        verdict = "NOISY_PENDING"
-        reason = (
-            f"paired jitter is noisy against control median {control_median_ms:.3f}ms "
-            f"and the statistical evidence is not yet conclusive; "
-            f"range={_format_optional_ms(paired_range_ms)}ms, stdev={_format_optional_ms(paired_stdev_ms)}ms."
-        )
     else:
-        verdict = "neutral"
-        reason = (
-            f"paired median delta={median_delta_ms:.3f}ms is positive but not yet credible enough for acceptance; "
-            f"bootstrap CI [{_format_optional_ms(bootstrap_low_ms)}, {_format_optional_ms(bootstrap_high_ms)}]ms, "
-            f"p={p_value:.6f}."
-        )
+        # weak tier — fall back to noise_flag to distinguish NOISY_PENDING from neutral.
+        if noise_flag == "NOISY":
+            verdict = "NOISY_PENDING"
+            reason = (
+                f"paired jitter is noisy against control median {control_median_ms:.3f}ms "
+                f"and the statistical evidence is not yet conclusive "
+                f"(confidence tier: weak, margin={_format_optional_ms(ct.margin)}ms); "
+                f"range={_format_optional_ms(paired_range_ms)}ms, stdev={_format_optional_ms(paired_stdev_ms)}ms."
+            )
+        else:
+            verdict = "neutral"
+            reason = (
+                f"paired median delta={median_delta_ms:.3f}ms is positive but not yet credible enough for acceptance "
+                f"(confidence tier: weak, margin={_format_optional_ms(ct.margin)}ms); "
+                f"bootstrap CI [{_format_optional_ms(bootstrap_low_ms)}, {_format_optional_ms(bootstrap_high_ms)}]ms, "
+                f"p={p_value:.6f}."
+            )
 
     return PairedTimingEvidence(
         control_samples_ms=control,
@@ -365,6 +511,11 @@ def summarize_paired_timing(
         paired_stdev_ms=paired_stdev_ms,
         paired_range_ms=paired_range_ms,
         paired_mean_ms=paired_mean_ms,
+        confidence_tier_name=ct.tier,
+        confidence_margin_ms=ct.margin,
+        confidence_ci_width_ms=ct.ci_width,
+        confidence_decisiveness=ct.decisiveness,
+        confidence_sign_consistency=ct.sign_consistency,
     )
 
 
@@ -399,6 +550,18 @@ def evidence_fields(evidence: PairedTimingEvidence, *, change_class: str = "clas
         "paired_range_ms": _format_optional_ms(evidence.paired_range_ms),
         "paired_mean_ms": _format_optional_ms(evidence.paired_mean_ms),
         "noise_flag": evidence.noise_flag,
+        # Confidence tier fields (B redesign, 2026-06-02).
+        "confidence_tier": evidence.confidence_tier_name or "",
+        "confidence_margin_ms": _format_optional_ms(evidence.confidence_margin_ms),
+        "confidence_ci_width_ms": _format_optional_ms(evidence.confidence_ci_width_ms),
+        "confidence_decisiveness": (
+            "" if evidence.confidence_decisiveness is None
+            else f"{evidence.confidence_decisiveness:.4f}"
+        ),
+        "confidence_sign_consistency": (
+            "" if evidence.confidence_sign_consistency is None
+            else f"{evidence.confidence_sign_consistency:.4f}"
+        ),
     }
 
 

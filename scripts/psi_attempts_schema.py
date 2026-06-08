@@ -104,4 +104,10 @@ ATTEMPTS_FIELDNAMES: list[str] = [
     "control_head",
     "control_median_ms",
     "control_median_seconds",
+    # Confidence tier fields (B redesign, 2026-06-02).
+    "confidence_tier",
+    "confidence_margin_ms",
+    "confidence_ci_width_ms",
+    "confidence_decisiveness",
+    "confidence_sign_consistency",
 ]

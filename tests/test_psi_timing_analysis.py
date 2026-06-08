@@ -11,7 +11,13 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from psi_attempts_schema import ATTEMPTS_FIELDNAMES  # noqa: E402
 from psi_headless_auto_loop import apply_change_class_policy, judge_verdict  # noqa: E402
-from psi_timing_analysis import evidence_fields, summarize_paired_timing, validate_class_a  # noqa: E402
+from psi_timing_analysis import (  # noqa: E402
+    ConfidenceTierResult,
+    confidence_tier,
+    evidence_fields,
+    summarize_paired_timing,
+    validate_class_a,
+)
 
 
 class PairedTimingAnalysisTests(unittest.TestCase):
@@ -30,12 +36,23 @@ class PairedTimingAnalysisTests(unittest.TestCase):
         self.assertIn("non-improvement", evidence.reason)
 
     def test_accepted_noisy_single_when_replicated_false(self) -> None:
-        """When replicated=False and stats conclusive + noisy -> accepted_noisy_single."""
-        # Use 12 samples with high deltas variance to trigger NOISY, and strong
-        # positive signal so statistical evidence is conclusive.
+        """When replicated=False and tier is marginal + noisy -> accepted_noisy_single.
+
+        Uses bimodal deltas (6 × 500ms + 6 × 15000ms): all positive so noise_flag=NOISY
+        (range/control_median ≈ 29%), CI_low > 0 and p is tiny (bimodal permutation
+        distribution can never reach the observed median), but decisiveness << 1.0
+        because the CI is extremely wide.  This forces the marginal tier, which is
+        the correct path for accepted_noisy_single under the B redesign.
+        """
+        # Bimodal deltas: 6×500ms + 6×15000ms → median=7750ms, range=14500ms.
+        # range/control_median = 14500/50000 = 29% >> 2% → NOISY.
+        # Bootstrap CI is extremely wide (~[500, 15000]), so decisiveness << 1.0 → marginal.
+        control_6_6 = [50000] * 12
+        candidate_6_6 = [49500, 49500, 49500, 49500, 49500, 49500,
+                         35000, 35000, 35000, 35000, 35000, 35000]
         evidence = summarize_paired_timing(
-            [50000, 50100, 49900, 50200, 49800, 50300, 49700, 50400, 49600, 50500, 50050, 50250],
-            [37000, 43000, 39500, 41500, 40000, 44000, 40500, 38500, 43500, 39500, 42000, 39000],
+            control_6_6,
+            candidate_6_6,
             replicated=False,
             required_pairs=5,
             bootstrap_resamples=2000,
@@ -43,14 +60,18 @@ class PairedTimingAnalysisTests(unittest.TestCase):
         )
 
         self.assertEqual(evidence.noise_flag, "NOISY")
+        self.assertEqual(evidence.confidence_tier_name, "marginal")
         self.assertEqual(evidence.verdict, "accepted_noisy_single")
         self.assertIn("queued for validation", evidence.reason)
 
     def test_accepted_noisy_replicated_when_replicated_true(self) -> None:
-        """When replicated=True and stats conclusive + noisy -> accepted_noisy_replicated."""
+        """When replicated=True and tier is marginal + noisy -> accepted_noisy_replicated."""
+        control_6_6 = [50000] * 12
+        candidate_6_6 = [49500, 49500, 49500, 49500, 49500, 49500,
+                         35000, 35000, 35000, 35000, 35000, 35000]
         evidence = summarize_paired_timing(
-            [50000, 50100, 49900, 50200, 49800, 50300, 49700, 50400, 49600, 50500, 50050, 50250],
-            [37000, 43000, 39500, 41500, 40000, 44000, 40500, 38500, 43500, 39500, 42000, 39000],
+            control_6_6,
+            candidate_6_6,
             replicated=True,
             required_pairs=5,
             bootstrap_resamples=2000,
@@ -58,6 +79,7 @@ class PairedTimingAnalysisTests(unittest.TestCase):
         )
 
         self.assertEqual(evidence.noise_flag, "NOISY")
+        self.assertEqual(evidence.confidence_tier_name, "marginal")
         self.assertEqual(evidence.verdict, "accepted_noisy_replicated")
         self.assertIn("replicated evidence", evidence.reason)
 
@@ -232,6 +254,188 @@ class PairedTimingAnalysisTests(unittest.TestCase):
         self.assertEqual(candidate["change_class"], "class_b")
         self.assertIn("valid Class A", candidate["class_a_validation_reason"])
         self.assertIn("patch-structure validation", candidate["class_a_validation_reason"])
+
+
+class ConfidenceTierUnitTests(unittest.TestCase):
+    """Unit tests for the confidence_tier() pure function (B redesign)."""
+
+    def test_decisive_strong_consistent_signal(self) -> None:
+        """Stack-skip m8 profile: 10σ CI, 8/8 positive → decisive."""
+        # Mirrors smoke_m8 run_a: CI=[6840, 8200], control~58306, all positive.
+        result = confidence_tier(
+            bootstrap_ci_low_ms=6840.0,
+            bootstrap_ci_high_ms=8200.0,
+            median_delta_ms=7463.0,
+            paired_deltas_ms=[7200.0, 7500.0, 7100.0, 7800.0, 7300.0, 7600.0, 7400.0, 7700.0],
+            permutation_p_value_arg=0.070,  # n=8 power artifact; decisive trusts CI not p
+            delta_min_ms=291.0,  # 0.5% of 58306ms
+        )
+        self.assertEqual(result.tier, "decisive")
+        self.assertIsNotNone(result.margin)
+        assert result.margin is not None
+        self.assertGreater(result.margin, 0.0)
+        self.assertIsNotNone(result.decisiveness)
+        assert result.decisiveness is not None
+        self.assertGreaterEqual(result.decisiveness, 1.0)
+        self.assertIsNotNone(result.sign_consistency)
+        assert result.sign_consistency is not None
+        self.assertGreaterEqual(result.sign_consistency, 0.9)
+
+    def test_marginal_bimodal_wide_ci(self) -> None:
+        """Bimodal deltas: wide CI forces decisiveness << 1 → marginal despite p≈0."""
+        result = confidence_tier(
+            bootstrap_ci_low_ms=500.0,
+            bootstrap_ci_high_ms=15000.0,
+            median_delta_ms=7750.0,
+            paired_deltas_ms=[500.0] * 6 + [15000.0] * 6,
+            permutation_p_value_arg=0.0005,  # essentially 0 due to bimodal structure
+            delta_min_ms=250.0,
+        )
+        self.assertEqual(result.tier, "marginal")
+        self.assertIsNotNone(result.decisiveness)
+        assert result.decisiveness is not None
+        self.assertLess(result.decisiveness, 1.0)
+
+    def test_weak_negative_margin(self) -> None:
+        """FALSE candidate: CI_low negative → margin < 0 → weak."""
+        result = confidence_tier(
+            bootstrap_ci_low_ms=-926.0,
+            bootstrap_ci_high_ms=200.0,
+            median_delta_ms=-308.0,
+            paired_deltas_ms=[-500.0] * 8 + [200.0] * 4,
+            permutation_p_value_arg=0.188,
+            delta_min_ms=250.0,
+        )
+        self.assertEqual(result.tier, "weak")
+        self.assertIsNotNone(result.margin)
+        assert result.margin is not None
+        self.assertLess(result.margin, 0.0)
+
+    def test_weak_no_ci(self) -> None:
+        """No CI (None) → weak regardless of other inputs."""
+        result = confidence_tier(
+            bootstrap_ci_low_ms=None,
+            bootstrap_ci_high_ms=None,
+            median_delta_ms=1000.0,
+            paired_deltas_ms=[1000.0] * 5,
+            permutation_p_value_arg=0.01,
+            delta_min_ms=0.0,
+        )
+        self.assertEqual(result.tier, "weak")
+
+    def test_weak_high_p_not_marginal(self) -> None:
+        """margin > 0 but p > 0.05 → NOT marginal → weak."""
+        result = confidence_tier(
+            bootstrap_ci_low_ms=300.0,
+            bootstrap_ci_high_ms=2000.0,
+            median_delta_ms=1000.0,
+            paired_deltas_ms=[1000.0] * 8 + [-200.0] * 4,
+            permutation_p_value_arg=0.195,  # r2 analog
+            delta_min_ms=250.0,
+        )
+        self.assertEqual(result.tier, "weak")
+
+    def test_degenerate_zero_ci_width_is_decisive(self) -> None:
+        """Zero-width CI (single sample) with positive margin → decisive (∞ decisiveness)."""
+        result = confidence_tier(
+            bootstrap_ci_low_ms=5000.0,
+            bootstrap_ci_high_ms=5000.0,
+            median_delta_ms=5000.0,
+            paired_deltas_ms=[5000.0],
+            permutation_p_value_arg=0.5,
+            delta_min_ms=250.0,
+        )
+        self.assertEqual(result.tier, "decisive")
+        self.assertIsNone(result.decisiveness)  # sentinel for ∞
+
+
+class ConfidenceTierIntegrationTests(unittest.TestCase):
+    """Integration tests: summarize_paired_timing with B-redesign routing."""
+
+    def _stack_skip_m8_analog_samples(self) -> tuple[list[float], list[float]]:
+        """8-pair samples mimicking stack_skip smoke_m8: ~12.8% improvement, all positive.
+
+        Delta spread must be >= 2% of control_median to trigger noise_flag=NOISY.
+        Actual smoke_m8 had control_median≈58306ms, delta range=2589ms (~4.4%).
+        We replicate that: 8 pairs with ~7300–9900ms deltas (range ≈ 2600ms,
+        control_median ≈ 58400ms → 4.5%).
+        """
+        control = [58590, 58609, 58719, 58484, 57895, 58348, 58567, 59026]
+        # Spread candidates to produce delta range of ~2600ms (all positive)
+        candidate = [51100, 51300, 52400, 51200, 50500, 51800, 51600, 50800]
+        # Deltas: 7490, 7309, 6319, 7284, 7395, 6548, 6967, 8226
+        # range = 8226-6319 = 1907ms; control_median ≈ 58550ms → 3.3% → NOISY
+        return control, candidate
+
+    def test_decisive_large_effect_accepted_without_replication(self) -> None:
+        """A decisive signal (strong m8 analog) must produce accepted, NOT accepted_noisy_single.
+
+        This is the primary regression guard for the B redesign: before the fix,
+        stack_skip m8 was forced to accepted_noisy_single due to noise_flag=NOISY
+        even though the CI was 10σ above zero.
+        """
+        control, candidate = self._stack_skip_m8_analog_samples()
+        evidence = summarize_paired_timing(
+            control, candidate,
+            replicated=False,
+            required_pairs=5,
+            bootstrap_resamples=2000,
+            permutation_resamples=2000,
+        )
+        self.assertEqual(evidence.noise_flag, "NOISY")
+        self.assertEqual(evidence.confidence_tier_name, "decisive")
+        self.assertEqual(evidence.verdict, "accepted")
+        self.assertNotIn("queued for validation", evidence.reason)
+
+    def test_decisive_accepted_even_when_replicated_false(self) -> None:
+        """decisive tier must produce 'accepted' regardless of replicated flag."""
+        control, candidate = self._stack_skip_m8_analog_samples()
+        ev_false = summarize_paired_timing(
+            control, candidate, replicated=False,
+            required_pairs=5, bootstrap_resamples=2000, permutation_resamples=2000,
+        )
+        ev_true = summarize_paired_timing(
+            control, candidate, replicated=True,
+            required_pairs=5, bootstrap_resamples=2000, permutation_resamples=2000,
+        )
+        # Both should be "accepted" — decisive does NOT tax on replication.
+        self.assertEqual(ev_false.verdict, "accepted")
+        self.assertEqual(ev_true.verdict, "accepted")
+
+    def test_false_candidate_still_rejected(self) -> None:
+        """FALSE candidates (negative or near-zero true effect) remain rejected/neutral."""
+        # skip_sort_pass analog: median slightly positive but not significant
+        control = [50000] * 12
+        candidate = [49762] * 12  # +238ms — exactly the skip_sort_pass profile
+        evidence = summarize_paired_timing(
+            control, candidate,
+            required_pairs=5,
+            bootstrap_resamples=2000, permutation_resamples=2000,
+        )
+        # CI_low will be exactly 238 (no variance) but delta_min = 0.5% * 50000 = 250 → margin < 0
+        # Or CI_low > 0 but p=1.0 (no variance at all, deterministic). Either way, not accepted.
+        self.assertNotIn(evidence.verdict, ("accepted", "accepted_noisy_single", "accepted_noisy_replicated"))
+
+    def test_confidence_fields_in_evidence(self) -> None:
+        """PairedTimingEvidence must carry the five confidence tier fields."""
+        control, candidate = self._stack_skip_m8_analog_samples()
+        ev = summarize_paired_timing(control, candidate, required_pairs=5,
+                                     bootstrap_resamples=400, permutation_resamples=400)
+        self.assertIsNotNone(ev.confidence_tier_name)
+        self.assertIn(ev.confidence_tier_name, ("decisive", "marginal", "weak"))
+        self.assertIsNotNone(ev.confidence_margin_ms)
+        self.assertIsNotNone(ev.confidence_ci_width_ms)
+        self.assertIsNotNone(ev.confidence_sign_consistency)
+
+    def test_evidence_fields_include_confidence_keys(self) -> None:
+        """evidence_fields() must emit the five new confidence keys."""
+        control, candidate = self._stack_skip_m8_analog_samples()
+        ev = summarize_paired_timing(control, candidate, required_pairs=5,
+                                     bootstrap_resamples=400, permutation_resamples=400)
+        fields = evidence_fields(ev)
+        for key in ("confidence_tier", "confidence_margin_ms", "confidence_ci_width_ms",
+                    "confidence_decisiveness", "confidence_sign_consistency"):
+            self.assertIn(key, fields, f"Missing key: {key}")
 
 
 if __name__ == "__main__":
