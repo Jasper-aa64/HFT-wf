@@ -257,6 +257,57 @@ class TwapHarnessReplayTests(unittest.TestCase):
         self.assertEqual(verdict, "rejected")
         self.assertEqual(reason, "TWAP normal-frequency p95 regression 4.400ms exceeds 1.000ms")
 
+    def test_twap_normal_improvement_still_uses_legacy_remote_decision_path(self) -> None:
+        batch_state = {
+            "compare_status": "pass",
+            "decision": "accepted",
+            "reason": "remote TWAP gate accepted candidate",
+            "timing_verdict": "accepted",
+            "lost_failure_count": 0,
+            "twap_case_deltas": [
+                {
+                    "case": "100_i50_s4",
+                    "control_p95_ms": "12.0",
+                    "candidate_p95_ms": "9.0",
+                    "p95_delta_ms": -3.0,
+                    "control_lost": "0",
+                    "candidate_lost": "0",
+                    "control_unknown_pushes": "0",
+                    "candidate_unknown_pushes": "0",
+                }
+            ],
+        }
+
+        verdict, reason = loop.judge_verdict(batch_state)
+
+        self.assertEqual(verdict, "accepted")
+        self.assertEqual(reason, "")
+
+    def test_twap_stress_regression_guard_remains_welded_for_now(self) -> None:
+        batch_state = {
+            "compare_status": "pass",
+            "decision": "accepted",
+            "reason": "remote TWAP gate accepted candidate",
+            "lost_failure_count": 0,
+            "twap_case_deltas": [
+                {
+                    "case": "500_i5_s4",
+                    "control_p95_ms": "50.0",
+                    "candidate_p95_ms": "55.5",
+                    "p95_delta_ms": 5.5,
+                    "control_lost": "0",
+                    "candidate_lost": "0",
+                    "control_unknown_pushes": "0",
+                    "candidate_unknown_pushes": "0",
+                }
+            ],
+        }
+
+        verdict, reason = loop.judge_verdict(batch_state)
+
+        self.assertEqual(verdict, "rejected")
+        self.assertEqual(reason, "TWAP stress p95 regression 5.500ms exceeds 5.000ms")
+
     def test_multi_subscriber_unknown_pushes_reject_and_preserve_new_fields(self) -> None:
         summary = {
             "candidate_id": "twap_unknown_push_candidate",

@@ -223,6 +223,48 @@ class ConfidenceTierResult:
     sign_consistency: float | None
 
 
+@dataclass(frozen=True)
+class RegressionCheck:
+    name: str
+    measured: float | None
+    limit: float | None
+    ok: bool
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class ScorecardPrimary:
+    name: str
+    samples_ms: list[float]
+    required_sample_count: int
+    control_median_ms: float
+    median_delta_ms: float | None
+    bootstrap_ci_low_ms: float | None
+    bootstrap_ci_high_ms: float | None
+    permutation_p_value: float | None
+    paired_stdev_ms: float | None
+    paired_range_ms: float | None
+    noise_flag: str
+    confidence_tier: ConfidenceTierResult
+
+
+@dataclass(frozen=True)
+class Scorecard:
+    scenario_id: str
+    correctness_pass: bool
+    correctness_reason: str
+    primary: ScorecardPrimary
+    regressions: tuple[RegressionCheck, ...] = ()
+    performance_bypass_verdict: str = ""
+    performance_bypass_reason: str = ""
+
+
+@dataclass(frozen=True)
+class ScorecardVerdict:
+    verdict: str
+    reason: str
+
+
 def confidence_tier(
     bootstrap_ci_low_ms: float | None,
     bootstrap_ci_high_ms: float | None,
@@ -309,6 +351,186 @@ def confidence_tier(
     )
 
 
+class PsiTimingAdapter:
+    """Translate Psi paired timing evidence into the domain-blind scorecard."""
+
+    @staticmethod
+    def scorecard(
+        *,
+        deltas_ms: list[float],
+        required_pairs: int,
+        control_median_ms: float,
+        median_delta_ms: float | None,
+        bootstrap_ci_low_ms: float | None,
+        bootstrap_ci_high_ms: float | None,
+        permutation_p_value_arg: float | None,
+        paired_stdev_ms: float | None,
+        paired_range_ms: float | None,
+        noise_flag: str,
+        confidence_tier_result: ConfidenceTierResult,
+        build_pass: bool,
+        compare_pass: bool,
+        change_class: str,
+        scenario_id: str = "psi_paired_timing",
+    ) -> Scorecard:
+        if not build_pass:
+            correctness_pass = False
+            correctness_reason = "build failed before paired timing evidence could be trusted."
+        elif not compare_pass:
+            correctness_pass = False
+            correctness_reason = "compare failed; the paired timing evidence is invalid."
+        else:
+            correctness_pass = True
+            correctness_reason = ""
+
+        bypass_verdict = ""
+        bypass_reason = ""
+        if correctness_pass and change_class == "class_a":
+            bypass_verdict = "accepted_class_a"
+            bypass_reason = "Class A algorithmic change: correctness pass is sufficient; perf recorded but not gated."
+
+        return Scorecard(
+            scenario_id=scenario_id,
+            correctness_pass=correctness_pass,
+            correctness_reason=correctness_reason,
+            performance_bypass_verdict=bypass_verdict,
+            performance_bypass_reason=bypass_reason,
+            primary=ScorecardPrimary(
+                name="paired_median_delta_ms",
+                samples_ms=deltas_ms,
+                required_sample_count=required_pairs,
+                control_median_ms=control_median_ms,
+                median_delta_ms=median_delta_ms,
+                bootstrap_ci_low_ms=bootstrap_ci_low_ms,
+                bootstrap_ci_high_ms=bootstrap_ci_high_ms,
+                permutation_p_value=permutation_p_value_arg,
+                paired_stdev_ms=paired_stdev_ms,
+                paired_range_ms=paired_range_ms,
+                noise_flag=noise_flag,
+                confidence_tier=confidence_tier_result,
+            ),
+        )
+
+
+def judge_scorecard(
+    scorecard: Scorecard,
+    *,
+    replicated: bool = False,
+    decisive_k: float = DEFAULT_DECISIVE_K,
+) -> ScorecardVerdict:
+    """Domain-blind scorecard judge for the primary performance metric."""
+
+    primary = scorecard.primary
+    median_delta_ms = primary.median_delta_ms
+    bootstrap_low_ms = primary.bootstrap_ci_low_ms
+    bootstrap_high_ms = primary.bootstrap_ci_high_ms
+    p_value = primary.permutation_p_value
+    pair_count = len(primary.samples_ms)
+    control_median_ms = primary.control_median_ms
+    paired_range_ms = primary.paired_range_ms
+    paired_stdev_ms = primary.paired_stdev_ms
+    noise_flag = primary.noise_flag
+    ct = primary.confidence_tier
+
+    if not scorecard.correctness_pass:
+        return ScorecardVerdict("rejected", scorecard.correctness_reason)
+    if scorecard.performance_bypass_verdict:
+        return ScorecardVerdict(scorecard.performance_bypass_verdict, scorecard.performance_bypass_reason)
+    for regression in scorecard.regressions:
+        if not regression.ok:
+            reason = regression.reason or f"regression {regression.name} breached configured limit"
+            return ScorecardVerdict("rejected", reason)
+
+    clear_non_improvement = (
+        pair_count >= primary.required_sample_count
+        and median_delta_ms is not None
+        and median_delta_ms <= 0.0
+        and bootstrap_high_ms is not None
+        and bootstrap_high_ms <= 0.0
+    )
+
+    if clear_non_improvement:
+        return ScorecardVerdict(
+            "rejected",
+            (
+                f"paired evidence shows non-improvement; median delta={median_delta_ms:.3f}ms against "
+                f"control median {control_median_ms:.3f}ms with bootstrap CI "
+                f"[{_format_optional_ms(bootstrap_low_ms)}, {_format_optional_ms(bootstrap_high_ms)}]ms "
+                f"and permutation p={p_value:.6f}."
+            ),
+        )
+    if pair_count < primary.required_sample_count:
+        return ScorecardVerdict(
+            "neutral",
+            f"screening only; collected {pair_count} paired samples, need at least {primary.required_sample_count}.",
+        )
+    if median_delta_ms is None or median_delta_ms <= 0.0:
+        return ScorecardVerdict(
+            "rejected",
+            "paired median delta is not positive; candidate is not faster under the interleaved A/B samples.",
+        )
+    if ct.tier == "decisive":
+        decisiveness_str = f"{ct.decisiveness:.3f}" if ct.decisiveness is not None else "\u221e"
+        return ScorecardVerdict(
+            "accepted",
+            (
+                f"paired median delta={median_delta_ms:.3f}ms against control median {control_median_ms:.3f}ms "
+                f"with bootstrap CI [{_format_optional_ms(bootstrap_low_ms)}, {_format_optional_ms(bootstrap_high_ms)}]ms "
+                f"(CI-native decisive: margin={_format_optional_ms(ct.margin)}ms, "
+                f"decisiveness={decisiveness_str}, "
+                f"sign_consistency={ct.sign_consistency:.2f}); "
+                f"permutation p={_format_optional_ms(p_value) if p_value is not None else 'n/a'} (reported, not gating)."
+            ),
+        )
+    if ct.tier == "marginal":
+        if replicated:
+            return ScorecardVerdict(
+                "accepted_noisy_replicated",
+                (
+                    f"paired median delta={median_delta_ms:.3f}ms against control median {control_median_ms:.3f}ms "
+                    f"is statistically conclusive (bootstrap CI [{_format_optional_ms(bootstrap_low_ms)}, "
+                    f"{_format_optional_ms(bootstrap_high_ms)}]ms, permutation p={p_value:.6f}) "
+                    f"with replicated evidence across multiple locked independent runs; "
+                    f"measurement environment was noisy (range={_format_optional_ms(paired_range_ms)}ms, "
+                    f"stdev={_format_optional_ms(paired_stdev_ms)}ms) but replication supports shared-host promotion; "
+                    f"artifact marked non-bare-metal."
+                ),
+            )
+        marginal_dec = f"{ct.decisiveness:.3f}" if ct.decisiveness is not None else "0.000"
+        marginal_sign = f"{ct.sign_consistency:.2f}" if ct.sign_consistency is not None else "0.00"
+        return ScorecardVerdict(
+            "accepted_noisy_single",
+            (
+                f"paired median delta={median_delta_ms:.3f}ms against control median {control_median_ms:.3f}ms "
+                f"is statistically conclusive (bootstrap CI [{_format_optional_ms(bootstrap_low_ms)}, "
+                f"{_format_optional_ms(bootstrap_high_ms)}]ms, permutation p={p_value:.6f}) "
+                f"but confidence tier is marginal (decisiveness={marginal_dec} "
+                f"< {decisive_k}, sign_consistency={marginal_sign}); "
+                f"accepted as evidence only \u2014 NOT applied; queued for validation replication."
+            ),
+        )
+
+    if noise_flag == "NOISY":
+        return ScorecardVerdict(
+            "NOISY_PENDING",
+            (
+                f"paired jitter is noisy against control median {control_median_ms:.3f}ms "
+                f"and the statistical evidence is not yet conclusive "
+                f"(confidence tier: weak, margin={_format_optional_ms(ct.margin)}ms); "
+                f"range={_format_optional_ms(paired_range_ms)}ms, stdev={_format_optional_ms(paired_stdev_ms)}ms."
+            ),
+        )
+    return ScorecardVerdict(
+        "neutral",
+        (
+            f"paired median delta={median_delta_ms:.3f}ms is positive but not yet credible enough for acceptance "
+            f"(confidence tier: weak, margin={_format_optional_ms(ct.margin)}ms); "
+            f"bootstrap CI [{_format_optional_ms(bootstrap_low_ms)}, {_format_optional_ms(bootstrap_high_ms)}]ms, "
+            f"p={p_value:.6f}."
+        ),
+    )
+
+
 def format_samples_ms(values_ms: list[float]) -> str:
     return _csv([float(value) for value in values_ms])
 
@@ -381,14 +603,6 @@ def summarize_paired_timing(
         resamples=permutation_resamples,
         seed_parts=(control, candidate, verdict_context, required_pairs, sample_floor_for_bundle_audit),
     )
-    clear_non_improvement = (
-        pair_count >= required_pairs
-        and median_delta_ms is not None
-        and median_delta_ms <= 0.0
-        and bootstrap_high_ms is not None
-        and bootstrap_high_ms <= 0.0
-    )
-
     # SNR-native confidence tier (B redesign, Option A / CI-native, 2026-06-02).
     # delta_min_ms defaults to 0.5 % of control_median when not supplied.
     # This will become a human-frozen contract field when the unified scorecard (A) lands.
@@ -408,88 +622,25 @@ def summarize_paired_timing(
         sign_min=sign_min,
     )
 
-    if not build_pass:
-        verdict = "rejected"
-        reason = "build failed before paired timing evidence could be trusted."
-    elif not compare_pass:
-        verdict = "rejected"
-        reason = "compare failed; the paired timing evidence is invalid."
-    elif change_class == "class_a" and build_pass and compare_pass:
-        verdict = "accepted_class_a"
-        reason = "Class A algorithmic change: correctness pass is sufficient; perf recorded but not gated."
-    elif clear_non_improvement:
-        verdict = "rejected"
-        reason = (
-            f"paired evidence shows non-improvement; median delta={median_delta_ms:.3f}ms against "
-            f"control median {control_median_ms:.3f}ms with bootstrap CI "
-            f"[{_format_optional_ms(bootstrap_low_ms)}, {_format_optional_ms(bootstrap_high_ms)}]ms "
-            f"and permutation p={p_value:.6f}."
-        )
-    elif pair_count < required_pairs:
-        verdict = "neutral"
-        reason = f"screening only; collected {pair_count} paired samples, need at least {required_pairs}."
-    elif median_delta_ms is None or median_delta_ms <= 0.0:
-        verdict = "rejected"
-        reason = (
-            "paired median delta is not positive; candidate is not faster under the interleaved A/B samples."
-        )
-    elif ct.tier == "decisive":
-        # Decisive: CI margin clears delta_min by >= decisive_k widths AND sign-consistent.
-        # noise_flag is retained as a diagnostic field but no longer gates acceptance here.
-        _decisiveness_str = (
-            f"{ct.decisiveness:.3f}" if ct.decisiveness is not None else "∞"
-        )
-        verdict = "accepted"
-        reason = (
-            f"paired median delta={median_delta_ms:.3f}ms against control median {control_median_ms:.3f}ms "
-            f"with bootstrap CI [{_format_optional_ms(bootstrap_low_ms)}, {_format_optional_ms(bootstrap_high_ms)}]ms "
-            f"(CI-native decisive: margin={_format_optional_ms(ct.margin)}ms, "
-            f"decisiveness={_decisiveness_str}, "
-            f"sign_consistency={ct.sign_consistency:.2f}); "
-            f"permutation p={_format_optional_ms(p_value) if p_value is not None else 'n/a'} (reported, not gating)."
-        )
-    elif ct.tier == "marginal":
-        if replicated:
-            verdict = "accepted_noisy_replicated"
-            reason = (
-                f"paired median delta={median_delta_ms:.3f}ms against control median {control_median_ms:.3f}ms "
-                f"is statistically conclusive (bootstrap CI [{_format_optional_ms(bootstrap_low_ms)}, "
-                f"{_format_optional_ms(bootstrap_high_ms)}]ms, permutation p={p_value:.6f}) "
-                f"with replicated evidence across multiple locked independent runs; "
-                f"measurement environment was noisy (range={_format_optional_ms(paired_range_ms)}ms, "
-                f"stdev={_format_optional_ms(paired_stdev_ms)}ms) but replication supports shared-host promotion; "
-                f"artifact marked non-bare-metal."
-            )
-        else:
-            _marginal_dec = f"{ct.decisiveness:.3f}" if ct.decisiveness is not None else "0.000"
-            _marginal_sign = f"{ct.sign_consistency:.2f}" if ct.sign_consistency is not None else "0.00"
-            verdict = "accepted_noisy_single"
-            reason = (
-                f"paired median delta={median_delta_ms:.3f}ms against control median {control_median_ms:.3f}ms "
-                f"is statistically conclusive (bootstrap CI [{_format_optional_ms(bootstrap_low_ms)}, "
-                f"{_format_optional_ms(bootstrap_high_ms)}]ms, permutation p={p_value:.6f}) "
-                f"but confidence tier is marginal (decisiveness={_marginal_dec} "
-                f"< {decisive_k}, sign_consistency={_marginal_sign}); "
-                f"accepted as evidence only — NOT applied; queued for validation replication."
-            )
-    else:
-        # weak tier — fall back to noise_flag to distinguish NOISY_PENDING from neutral.
-        if noise_flag == "NOISY":
-            verdict = "NOISY_PENDING"
-            reason = (
-                f"paired jitter is noisy against control median {control_median_ms:.3f}ms "
-                f"and the statistical evidence is not yet conclusive "
-                f"(confidence tier: weak, margin={_format_optional_ms(ct.margin)}ms); "
-                f"range={_format_optional_ms(paired_range_ms)}ms, stdev={_format_optional_ms(paired_stdev_ms)}ms."
-            )
-        else:
-            verdict = "neutral"
-            reason = (
-                f"paired median delta={median_delta_ms:.3f}ms is positive but not yet credible enough for acceptance "
-                f"(confidence tier: weak, margin={_format_optional_ms(ct.margin)}ms); "
-                f"bootstrap CI [{_format_optional_ms(bootstrap_low_ms)}, {_format_optional_ms(bootstrap_high_ms)}]ms, "
-                f"p={p_value:.6f}."
-            )
+    scorecard = PsiTimingAdapter.scorecard(
+        deltas_ms=deltas_ms,
+        required_pairs=required_pairs,
+        control_median_ms=control_median_ms,
+        median_delta_ms=median_delta_ms,
+        bootstrap_ci_low_ms=bootstrap_low_ms,
+        bootstrap_ci_high_ms=bootstrap_high_ms,
+        permutation_p_value_arg=p_value,
+        paired_stdev_ms=paired_stdev_ms,
+        paired_range_ms=paired_range_ms,
+        noise_flag=noise_flag,
+        confidence_tier_result=ct,
+        build_pass=build_pass,
+        compare_pass=compare_pass,
+        change_class=change_class,
+    )
+    scorecard_verdict = judge_scorecard(scorecard, replicated=replicated, decisive_k=decisive_k)
+    verdict = scorecard_verdict.verdict
+    reason = scorecard_verdict.reason
 
     return PairedTimingEvidence(
         control_samples_ms=control,

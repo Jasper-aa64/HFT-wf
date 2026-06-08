@@ -13,8 +13,10 @@ from psi_attempts_schema import ATTEMPTS_FIELDNAMES  # noqa: E402
 from psi_headless_auto_loop import apply_change_class_policy, judge_verdict  # noqa: E402
 from psi_timing_analysis import (  # noqa: E402
     ConfidenceTierResult,
+    PsiTimingAdapter,
     confidence_tier,
     evidence_fields,
+    judge_scorecard,
     summarize_paired_timing,
     validate_class_a,
 )
@@ -436,6 +438,127 @@ class ConfidenceTierIntegrationTests(unittest.TestCase):
         for key in ("confidence_tier", "confidence_margin_ms", "confidence_ci_width_ms",
                     "confidence_decisiveness", "confidence_sign_consistency"):
             self.assertIn(key, fields, f"Missing key: {key}")
+
+
+class PsiScorecardCharacterizationTests(unittest.TestCase):
+    """Golden tests for the current Psi verdict surface before Scorecard refactor."""
+
+    def assertVerdictAndTier(
+        self,
+        control: list[float],
+        candidate: list[float],
+        *,
+        verdict: str,
+        tier: str,
+        reason_contains: str = "",
+        **kwargs: object,
+    ) -> None:
+        evidence = summarize_paired_timing(
+            control,
+            candidate,
+            required_pairs=5,
+            bootstrap_resamples=600,
+            permutation_resamples=600,
+            **kwargs,
+        )
+        self.assertEqual(evidence.verdict, verdict)
+        self.assertEqual(evidence.confidence_tier_name, tier)
+        if reason_contains:
+            self.assertIn(reason_contains, evidence.reason)
+
+    def test_current_decisive_positive_signal_is_accepted(self) -> None:
+        self.assertVerdictAndTier(
+            [58590, 58609, 58719, 58484, 57895, 58348, 58567, 59026],
+            [51100, 51300, 52400, 51200, 50500, 51800, 51600, 50800],
+            verdict="accepted",
+            tier="decisive",
+            reason_contains="CI-native decisive",
+        )
+
+    def test_current_clear_slowdown_is_rejected(self) -> None:
+        self.assertVerdictAndTier(
+            [50000, 50100, 49900, 50050, 50020],
+            [51000, 51150, 50950, 51200, 51080],
+            verdict="rejected",
+            tier="weak",
+            reason_contains="non-improvement",
+        )
+
+    def test_current_marginal_signal_is_accepted_noisy_single(self) -> None:
+        self.assertVerdictAndTier(
+            [50000] * 12,
+            [49500, 49500, 49500, 49500, 49500, 49500,
+             35000, 35000, 35000, 35000, 35000, 35000],
+            verdict="accepted_noisy_single",
+            tier="marginal",
+            reason_contains="NOT applied",
+        )
+
+    def test_current_screening_sample_count_is_neutral(self) -> None:
+        self.assertVerdictAndTier(
+            [50000, 50100, 49900],
+            [45000, 45100, 44900],
+            verdict="neutral",
+            tier="decisive",
+            reason_contains="screening only",
+        )
+
+    def test_current_build_failure_is_rejected(self) -> None:
+        self.assertVerdictAndTier(
+            [50000, 50100, 49900, 50050, 50020],
+            [45000, 45100, 44900, 45050, 45020],
+            verdict="rejected",
+            tier="decisive",
+            reason_contains="build failed",
+            build_pass=False,
+        )
+
+    def test_current_compare_failure_is_rejected(self) -> None:
+        self.assertVerdictAndTier(
+            [50000, 50100, 49900, 50050, 50020],
+            [45000, 45100, 44900, 45050, 45020],
+            verdict="rejected",
+            tier="decisive",
+            reason_contains="compare failed",
+            compare_pass=False,
+        )
+
+
+class PsiScorecardStructureTests(unittest.TestCase):
+    def test_psi_adapter_fills_domain_blind_scorecard(self) -> None:
+        tier = ConfidenceTierResult(
+            tier="decisive",
+            margin=1000.0,
+            ci_width=500.0,
+            decisiveness=2.0,
+            sign_consistency=1.0,
+        )
+
+        scorecard = PsiTimingAdapter.scorecard(
+            deltas_ms=[1500.0, 1600.0, 1700.0, 1800.0, 1900.0],
+            required_pairs=5,
+            control_median_ms=50000.0,
+            median_delta_ms=1700.0,
+            bootstrap_ci_low_ms=1500.0,
+            bootstrap_ci_high_ms=2000.0,
+            permutation_p_value_arg=0.01,
+            paired_stdev_ms=158.0,
+            paired_range_ms=400.0,
+            noise_flag="ok",
+            confidence_tier_result=tier,
+            build_pass=True,
+            compare_pass=True,
+            change_class="class_b",
+        )
+
+        self.assertEqual(scorecard.scenario_id, "psi_paired_timing")
+        self.assertTrue(scorecard.correctness_pass)
+        self.assertEqual(scorecard.primary.name, "paired_median_delta_ms")
+        self.assertEqual(scorecard.primary.samples_ms, [1500.0, 1600.0, 1700.0, 1800.0, 1900.0])
+        self.assertEqual(scorecard.regressions, ())
+
+        verdict = judge_scorecard(scorecard)
+        self.assertEqual(verdict.verdict, "accepted")
 
 
 if __name__ == "__main__":
