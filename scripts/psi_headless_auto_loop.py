@@ -59,7 +59,7 @@ from psi_patch_queue import (
     set_status as set_patch_status,
     snapshot_worktree,
 )
-from psi_timing_analysis import validate_class_a
+from psi_timing_analysis import TwapAdapter, validate_class_a
 from psi_timing_history import (
     HISTORY_FIELDNAMES,
     default_host_key,
@@ -126,6 +126,9 @@ def _merge_comparison_summary(batch_state: dict[str, Any], summary: dict[str, An
         "decision",
         "accepted",
         "lost_failure_count",
+        "has_control",
+        "build_status",
+        "correctness_status",
         "paired_evidence_status",
         "paired_evidence_reason",
         "timing_verdict",
@@ -1667,6 +1670,39 @@ def _twap_batch_stats(batch_state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _judge_twap_threshold_verdict(batch_state: dict[str, Any], twap_stats: dict[str, Any]) -> tuple[str, str]:
+    """Judge TWAP push case deltas via the shared threshold-consistency adapter."""
+
+    control_lost_total = int(twap_stats.get("control_lost_total") or 0)
+    control_unknown_push_total = int(twap_stats.get("control_unknown_push_total") or 0)
+    if control_lost_total > 0 or control_unknown_push_total > 0:
+        return "infra_blocked", f"TWAP control baseline unhealthy: control_lost_total={control_lost_total}, control_unknown_push_total={control_unknown_push_total}"
+
+    candidate_unknown_push_total = int(twap_stats.get("candidate_unknown_push_total") or 0)
+    if candidate_unknown_push_total > 0:
+        return "rejected", f"TWAP candidate produced unknown pushes: candidate_unknown_push_total={candidate_unknown_push_total}"
+
+    result = TwapAdapter.threshold_result(batch_state)
+    if result.lost_failure_count > 0:
+        return "rejected", f"TWAP push timing lost messages: lost_failure_count={result.lost_failure_count}"
+    if not result.stress_p95_regression_ok:
+        max_stress = float(twap_stats.get("max_stress_regression_ms") or 0.0)
+        return "rejected", f"TWAP stress p95 regression {max_stress:.3f}ms exceeds 5.000ms"
+    if not result.normal_frequency_p95_regression_ok:
+        max_normal = float(twap_stats.get("max_normal_regression_ms") or 0.0)
+        return "rejected", f"TWAP normal-frequency p95 regression {max_normal:.3f}ms exceeds 1.000ms"
+    if result.decision == "promotion_candidate":
+        if batch_state.get("remote_candidate_workspace"):
+            if str(batch_state.get("control_source_kind") or "") != "synced_same_source":
+                return "needs_paired_evidence", "synced candidate acceptance requires synced same-source control build"
+        return "accepted", ""
+    if result.decision == "screening_only":
+        return "screening_only", batch_state.get("paired_evidence_reason", "") or "TWAP threshold-consistency gate is screening-only"
+    if result.decision == "rejected":
+        return "rejected", batch_state.get("reason", "") or "TWAP threshold-consistency gate rejected candidate"
+    return "neutral", f"unrecognized TWAP threshold-consistency decision: {result.decision}"
+
+
 def _infra_failure_mode(batch_state: dict[str, Any], rc: int) -> str:
     for field in ("failure_mode", "timing_status", "timing_verdict", "reason"):
         raw = str(batch_state.get(field) or "")
@@ -2043,22 +2079,7 @@ def judge_verdict(batch_state: dict[str, Any]) -> tuple[str, str]:
 
     twap_stats = _twap_batch_stats(batch_state)
     if twap_stats.get("case_count"):
-        control_lost_total = int(twap_stats.get("control_lost_total") or 0)
-        control_unknown_push_total = int(twap_stats.get("control_unknown_push_total") or 0)
-        if control_lost_total > 0 or control_unknown_push_total > 0:
-            return "infra_blocked", f"TWAP control baseline unhealthy: control_lost_total={control_lost_total}, control_unknown_push_total={control_unknown_push_total}"
-        candidate_unknown_push_total = int(twap_stats.get("candidate_unknown_push_total") or 0)
-        if candidate_unknown_push_total > 0:
-            return "rejected", f"TWAP candidate produced unknown pushes: candidate_unknown_push_total={candidate_unknown_push_total}"
-        lost_failure_count = int(batch_state.get("lost_failure_count") or 0)
-        if lost_failure_count > 0:
-            return "rejected", f"TWAP push timing lost messages: lost_failure_count={lost_failure_count}"
-        max_normal = float(twap_stats.get("max_normal_regression_ms") or 0.0)
-        max_stress = float(twap_stats.get("max_stress_regression_ms") or 0.0)
-        if max_stress > 5.0:
-            return "rejected", f"TWAP stress p95 regression {max_stress:.3f}ms exceeds 5.000ms"
-        if max_normal > 1.0:
-            return "rejected", f"TWAP normal-frequency p95 regression {max_normal:.3f}ms exceeds 1.000ms"
+        return _judge_twap_threshold_verdict(batch_state, twap_stats)
 
     decision = (batch_state.get("decision") or "").lower()
     if decision == "rejected":

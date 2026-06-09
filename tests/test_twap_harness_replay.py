@@ -257,11 +257,11 @@ class TwapHarnessReplayTests(unittest.TestCase):
         self.assertEqual(verdict, "rejected")
         self.assertEqual(reason, "TWAP normal-frequency p95 regression 4.400ms exceeds 1.000ms")
 
-    def test_twap_normal_improvement_still_uses_legacy_remote_decision_path(self) -> None:
+    def test_twap_normal_improvement_promotes_through_threshold_adapter(self) -> None:
         batch_state = {
             "compare_status": "pass",
-            "decision": "accepted",
-            "reason": "remote TWAP gate accepted candidate",
+            "decision": "promotion_candidate",
+            "reason": "completed",
             "timing_verdict": "accepted",
             "lost_failure_count": 0,
             "twap_case_deltas": [
@@ -283,7 +283,60 @@ class TwapHarnessReplayTests(unittest.TestCase):
         self.assertEqual(verdict, "accepted")
         self.assertEqual(reason, "")
 
-    def test_twap_stress_regression_guard_remains_welded_for_now(self) -> None:
+    def test_twap_screening_only_ignores_legacy_remote_acceptance(self) -> None:
+        batch_state = {
+            "compare_status": "pass",
+            "decision": "accepted",
+            "reason": "remote TWAP gate accepted candidate",
+            "lost_failure_count": 0,
+            "twap_case_deltas": [
+                {
+                    "case": "100_i50_s4",
+                    "control_p95_ms": "12.0",
+                    "candidate_p95_ms": "11.6",
+                    "p95_delta_ms": -0.4,
+                    "control_lost": "0",
+                    "candidate_lost": "0",
+                    "control_unknown_pushes": "0",
+                    "candidate_unknown_pushes": "0",
+                }
+            ],
+        }
+
+        verdict, reason = loop.judge_verdict(batch_state)
+
+        self.assertEqual(verdict, "screening_only")
+        self.assertEqual(reason, "TWAP threshold-consistency gate is screening-only")
+
+    def test_twap_threshold_promotion_still_requires_synced_same_source_control(self) -> None:
+        batch_state = {
+            "compare_status": "pass",
+            "decision": "promotion_candidate",
+            "reason": "completed",
+            "timing_verdict": "accepted",
+            "remote_candidate_workspace": "/tmp/candidate",
+            "control_source_kind": "existing_runner",
+            "lost_failure_count": 0,
+            "twap_case_deltas": [
+                {
+                    "case": "100_i50_s4",
+                    "control_p95_ms": "12.0",
+                    "candidate_p95_ms": "9.0",
+                    "p95_delta_ms": -3.0,
+                    "control_lost": "0",
+                    "candidate_lost": "0",
+                    "control_unknown_pushes": "0",
+                    "candidate_unknown_pushes": "0",
+                }
+            ],
+        }
+
+        verdict, reason = loop.judge_verdict(batch_state)
+
+        self.assertEqual(verdict, "needs_paired_evidence")
+        self.assertEqual(reason, "synced candidate acceptance requires synced same-source control build")
+
+    def test_twap_stress_regression_guard_routes_through_threshold_adapter(self) -> None:
         batch_state = {
             "compare_status": "pass",
             "decision": "accepted",
