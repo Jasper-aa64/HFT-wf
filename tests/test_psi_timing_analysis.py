@@ -122,6 +122,23 @@ class PairedTimingAnalysisTests(unittest.TestCase):
         verdict, _ = judge_verdict(batch_state_class_a)
         self.assertEqual(verdict, "accepted_class_a")
 
+    def test_judge_verdict_does_not_downgrade_accepted_noisy_measurement(self) -> None:
+        """Remote CI-native accepted evidence must not be re-downgraded by the legacy noise flag."""
+        batch_state = {
+            "compare_status": "pass",
+            "control_source_kind": "synced_same_source",
+            "remote_candidate_workspace": "/remote/candidate",
+            "timing_verdict": "accepted",
+            "noise_flag": "NOISY",
+            "paired_sample_count": 8,
+            "median_delta_ms": "7201.500",
+            "bootstrap_ci_low_ms": "6525.000",
+            "bootstrap_ci_high_ms": "8049.000",
+        }
+        verdict, reason = judge_verdict(batch_state)
+        self.assertEqual(verdict, "accepted")
+        self.assertEqual(reason, "")
+
     def test_judge_verdict_handles_uppercase_verdict_strings(self) -> None:
         """judge_verdict must also handle UPPERCASE timing_verdict (legacy format)."""
         batch_state = {

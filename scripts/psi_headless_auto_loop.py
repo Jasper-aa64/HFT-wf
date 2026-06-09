@@ -2100,14 +2100,14 @@ def judge_verdict(batch_state: dict[str, Any]) -> tuple[str, str]:
         return "accepted_class_a", "Class A algorithmic change: correctness pass is sufficient; perf recorded but not gated."
     if timing in {"needs_paired_evidence", "screening_only"}:
         return timing, batch_state.get("paired_evidence_reason", "") or "paired A/B evidence is missing or screening-only"
+    if timing == "accepted":
+        return "accepted", ""
     if noise_flag == "NOISY" or timing == "noisy_pending":
         return (
             "NOISY_PENDING",
             "retry when same-host control stdev_ms < 1500 or paired range_ms < 1500",
         )
 
-    if timing.lower() == "accepted":
-        return "accepted", ""
     delta = batch_state.get("delta_ms") or 0.0
     if delta <= -100.0:
         return "rejected", "candidate is slower than control under same-host timing"
