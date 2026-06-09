@@ -1,7 +1,7 @@
 # Optimization Harness Guidelines
 
 > Scope: HFT-wf scripts and task drivers that generate, evaluate, classify,
-> retry, or promote optimization candidates for Psi/TWAP style performance work.
+> retry, or promote optimization candidates for low-latency performance work.
 
 ---
 
@@ -241,6 +241,38 @@ NOISY_PENDING means the candidate failed.
 NOISY_PENDING means the current measurement cannot authorize promotion. The
 candidate may still be valuable and should be classified according to signal
 strength, semantic risk, and retry policy.
+```
+
+### 8. Public Repository Naming
+
+GitHub-visible names must not include company-specific names, internal product
+names, or private abbreviations. This applies to new commit subjects, branch
+names, tag names, public run/artifact names, documentation titles, exported
+reports, and newly introduced filenames that will be pushed to GitHub.
+
+Use neutral domain names instead, for example:
+
+```text
+harness, timing, factor, position, aggregation, low-latency, candidate,
+scorecard, remote-run, patch-agent
+```
+
+Existing legacy code symbols and internal paths do not need a risky rename just
+to satisfy this rule. When touching public-facing text or creating new GitHub
+visible names, choose the neutral name from the start.
+
+#### Wrong
+
+```text
+<company-prefix>_next_candidate_experiment
+<company-prefix> patch agent
+```
+
+#### Correct
+
+```text
+factor candidate experiment
+optimization patch agent
 ```
 
 ---
