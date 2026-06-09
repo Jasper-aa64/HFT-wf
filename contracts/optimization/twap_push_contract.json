@@ -1,0 +1,42 @@
+{
+  "schema": "optimization_scorecard_contract_v1",
+  "contract_id": "twap_push_threshold_v1",
+  "domain": "twap_push",
+  "judge_kind": "threshold_consistency",
+  "scenario_id": "twap_position_push_default_cases",
+  "primary_metric": {
+    "name": "normal_case_p95_delta_ms",
+    "direction": "lower_is_better"
+  },
+  "cases": {
+    "default_measure_cases": [
+      "100:50:120",
+      "500:20:180",
+      "1000:20:240",
+      "500:5:240"
+    ],
+    "normal_interval_ms_min": 20,
+    "stress_interval_ms_max": 5
+  },
+  "thresholds": {
+    "min_normal_p95_improvement_ms": 1.0,
+    "max_normal_p95_regression_ms": 1.0,
+    "max_stress_p95_regression_ms": 5.0
+  },
+  "correctness_oracle": {
+    "kind": "twap_push_payload",
+    "requires_build_pass": true,
+    "requires_correctness_pass": true,
+    "requires_timing_pass": true
+  },
+  "regression_limits": [
+    {
+      "name": "lost_pushes",
+      "max": 0
+    },
+    {
+      "name": "unknown_pushes",
+      "max": 0
+    }
+  ]
+}

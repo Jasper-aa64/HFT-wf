@@ -1,0 +1,25 @@
+{
+  "schema": "optimization_scorecard_contract_v1",
+  "contract_id": "psi_timing_paired_v1",
+  "domain": "psi_timing",
+  "judge_kind": "confidence_tier",
+  "scenario_id": "psi_headless_paired_timing",
+  "primary_metric": {
+    "name": "paired_median_delta_ms",
+    "direction": "higher_is_better",
+    "delta_min_control_median_ratio": 0.005
+  },
+  "confidence": {
+    "decisive_k": 1.0,
+    "sign_min": 0.9
+  },
+  "sample_floors": {
+    "promotion": 5,
+    "bundle_audit": 7
+  },
+  "correctness_oracle": {
+    "kind": "psi_compare_gate",
+    "requires_compare_pass": true
+  },
+  "regression_limits": []
+}
