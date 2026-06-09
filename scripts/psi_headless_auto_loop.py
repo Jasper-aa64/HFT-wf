@@ -92,6 +92,7 @@ FORBIDDEN_PATCH_PATH_PARTS = {
     "baseline",
     "benchmark",
     "benchmarks",
+    "build",
     "compare",
     "compare_gate",
     "dataset",

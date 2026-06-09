@@ -421,6 +421,18 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
             self.assertTrue(ok, reason)
             self.assertTrue(Path(patch_meta["patch_path"]).exists())
 
+    def test_patch_boundary_rejects_build_artifacts(self) -> None:
+        violations = auto_loop._validate_patch_boundaries(
+            [
+                "PsiData/PsiBaseDataInfo.cpp",
+                "build/CMakeCache.txt",
+                "build/PsiData/CMakeFiles/PsiFactorCompute.dir/PsiBaseDataInfo.cpp.obj",
+            ]
+        )
+
+        self.assertEqual(len(violations), 2)
+        self.assertTrue(all("fixed boundary path component: build" in item for item in violations))
+
     def test_iteration_step_records_remote_infra_as_failed_not_rejected(self) -> None:
         with tempfile.TemporaryDirectory(prefix="psi_auto_loop_infra_") as raw_dir:
             run_dir = Path(raw_dir)

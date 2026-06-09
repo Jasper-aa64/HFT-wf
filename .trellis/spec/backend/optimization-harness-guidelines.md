@@ -96,6 +96,10 @@ The search layer must not:
 - treat noisy positive evidence as clean proof;
 - retry positive-noisy candidates immediately unless the ledger explicitly
   says the candidate is a quiet-window retry.
+- include local build directories, generated build products, benchmark outputs,
+  datasets, or compare-gate artifacts in candidate patches. Direct-edit agents
+  may inspect code, but candidate materialization must reject generated artifacts
+  before remote build or timing starts.
 
 #### 3.2 Validation Layer Contract
 
@@ -196,6 +200,8 @@ When changing harness code in this area, add or update tests that assert:
 - noisy positive evidence is not accepted;
 - positive-noisy candidates are retained for quiet-window review;
 - retry-only candidates cannot be regenerated as ordinary candidates;
+- patch materialization rejects build directories and other fixed-boundary
+  generated artifacts;
 - validation lock blocks a second performance timing run before timing starts;
 - a run cannot release another run's lock;
 - active runner / mid-run contamination is recorded as measurement-quality

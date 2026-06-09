@@ -24,10 +24,11 @@ Environment variables consumed:
   PSI_CANDIDATE_LEDGER       - optional task-level ledger with blocked classes
 
 Configuration:
-  PSI_PATCH_AGENT_MODE       - "api" (default), "cli", or "template"
+  PSI_PATCH_AGENT_MODE       - "api" (default), "cli", "codex", or "template"
   ANTHROPIC_API_KEY          - required for "api" mode
   PSI_PATCH_AGENT_MODEL      - model to use (default: claude-sonnet-4-6)
   PSI_PATCH_AGENT_MAX_TOKENS - max tokens for response (default: 4096)
+  PSI_CODEX_PATCH_TIMEOUT    - max seconds for codex exec mode (default: 900)
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -234,6 +236,17 @@ Rules:
 Generate the optimized code now."""
 
 
+def build_direct_edit_prompt(ctx: dict[str, Any], sources: dict[str, str]) -> str:
+    prompt = build_optimization_prompt(ctx, sources)
+    return (
+        prompt
+        + "\n\n## Direct Edit Mode\n"
+        + "Edit the candidate workspace files directly. Do not commit. Do not print patch_file blocks. "
+        + "Do not run builds, configure CMake, create build directories, or write generated artifacts. "
+        + "Keep the patch minimal and leave the workspace unchanged if no safe optimization exists.\n"
+    )
+
+
 def parse_llm_response(response: str) -> dict[str, str]:
     """Parse the LLM response into file path -> content pairs."""
     patches: dict[str, str] = {}
@@ -281,23 +294,103 @@ def call_claude_cli(prompt: str, workspace: Path) -> str | None:
     """Call claude CLI as a fallback."""
     prompt_file = workspace / ".psi_patch_prompt.txt"
     prompt_file.write_text(prompt, encoding="utf-8")
+    claude_bin = shutil.which("claude") or shutil.which("claude.cmd") or shutil.which("claude.exe")
+    if not claude_bin:
+        print("ERROR: claude CLI not found on PATH", file=sys.stderr)
+        prompt_file.unlink(missing_ok=True)
+        return None
 
     try:
         result = subprocess.run(
-            ["claude", "--print", "--no-input", "-p", prompt],
+            [claude_bin, "--print"],
             cwd=str(workspace),
+            input=prompt,
             capture_output=True,
             text=True,
-            timeout=120,
+            encoding="utf-8",
+            errors="replace",
+            timeout=300,
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout
+        print(
+            "ERROR: claude CLI returned no usable response "
+            f"rc={result.returncode} stdout={result.stdout.strip()!r} stderr={result.stderr.strip()!r}",
+            file=sys.stderr,
+        )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
         print(f"ERROR: claude CLI failed: {exc}", file=sys.stderr)
     finally:
         prompt_file.unlink(missing_ok=True)
 
     return None
+
+
+def workspace_has_changes(workspace: Path) -> bool:
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=str(workspace),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def call_codex_cli(prompt: str, workspace: Path, run_dir: Path, candidate_id: str) -> bool:
+    """Call Codex CLI to edit the candidate workspace directly."""
+    codex_bin = shutil.which("codex.cmd") or shutil.which("codex.exe") or shutil.which("codex")
+    if not codex_bin:
+        print("ERROR: codex CLI not found on PATH", file=sys.stderr)
+        return False
+
+    log_dir = run_dir / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    prompt_path = log_dir / f"codex_patch_prompt_{candidate_id}.md"
+    output_path = log_dir / f"codex_patch_output_{candidate_id}.txt"
+    exec_log_path = log_dir / f"codex_patch_exec_{candidate_id}.log"
+    prompt_path.write_text(prompt, encoding="utf-8")
+
+    command = [
+        codex_bin,
+        "exec",
+        "--cd",
+        str(workspace),
+        "--sandbox",
+        "workspace-write",
+        "--output-last-message",
+        str(output_path),
+        "-",
+    ]
+    timeout_seconds = int(os.environ.get("PSI_CODEX_PATCH_TIMEOUT", "900"))
+    try:
+        completed = subprocess.run(
+            command,
+            input=prompt,
+            cwd=str(workspace),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        print(f"ERROR: codex CLI failed: {exc}", file=sys.stderr)
+        return False
+    exec_log_path.write_text(completed.stdout or "", encoding="utf-8")
+    if completed.returncode != 0:
+        print(f"ERROR: codex CLI failed rc={completed.returncode}; see {exec_log_path}", file=sys.stderr)
+        return False
+    if not workspace_has_changes(workspace):
+        print("ERROR: codex CLI completed but left no workspace changes", file=sys.stderr)
+        return False
+    print(f"patch_agent: codex direct edit completed; prompt={prompt_path}; output={output_path}")
+    return True
 
 
 def apply_patches(workspace: Path, patches: dict[str, str]) -> list[str]:
@@ -332,11 +425,15 @@ def main() -> int:
 
     print(f"patch_agent: found {len(sources)} source files")
 
-    prompt = build_optimization_prompt(ctx, sources)
-
     mode = os.environ.get("PSI_PATCH_AGENT_MODE", "api")
     response: str | None = None
 
+    if mode == "codex":
+        prompt = build_direct_edit_prompt(ctx, sources)
+        run_dir = Path(ctx["run_dir"]) if ctx["run_dir"] else workspace
+        return 0 if call_codex_cli(prompt, workspace, run_dir, ctx["candidate_id"]) else 1
+
+    prompt = build_optimization_prompt(ctx, sources)
     if mode == "api":
         response = call_anthropic_api(prompt)
         if response is None and mode == "api":
