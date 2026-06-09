@@ -29,6 +29,9 @@ VERDICT_METHOD = "paired_bootstrap_permutation_v1"
 # sign_min: minimum fraction of paired deltas sharing the sign of the median delta.
 DEFAULT_DECISIVE_K = 1.0
 DEFAULT_SIGN_MIN = 0.9
+DEFAULT_TWAP_MIN_NORMAL_P95_IMPROVEMENT_MS = 1.0
+DEFAULT_TWAP_MAX_NORMAL_P95_REGRESSION_MS = 1.0
+DEFAULT_TWAP_MAX_STRESS_P95_REGRESSION_MS = 5.0
 
 
 @dataclass(frozen=True)
@@ -265,6 +268,26 @@ class ScorecardVerdict:
     reason: str
 
 
+@dataclass(frozen=True)
+class ThresholdCaseDelta:
+    case: str
+    p95_delta_ms: float | None
+    lane: str
+
+
+@dataclass(frozen=True)
+class ThresholdConsistencyResult:
+    decision: str
+    accepted: bool
+    lost_failure_count: int
+    has_control: bool
+    normal_frequency_p95_improved: bool
+    normal_frequency_p95_regression_ok: bool
+    stress_p95_regression_ok: bool
+    normal_cases: tuple[ThresholdCaseDelta, ...]
+    stress_cases: tuple[ThresholdCaseDelta, ...]
+
+
 def confidence_tier(
     bootstrap_ci_low_ms: float | None,
     bootstrap_ci_high_ms: float | None,
@@ -349,6 +372,144 @@ def confidence_tier(
         decisiveness=decisiveness,
         sign_consistency=sign_consistency,
     )
+
+
+def twap_case_interval_ms(case: str) -> int | None:
+    case_base = str(case).split("_s", 1)[0]
+    for part in case_base.split("_"):
+        if part.startswith("i"):
+            try:
+                return int(part[1:])
+            except ValueError:
+                return None
+    return None
+
+
+def _float_or_none(value: object) -> float | None:
+    try:
+        if value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_zero(value: object) -> int:
+    try:
+        if value == "":
+            return 0
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _twap_status_failed(row: dict[str, object]) -> bool:
+    return str(row.get("status") or "") not in {"", "PASS"}
+
+
+def threshold_consistency(
+    case_deltas: list[dict[str, object]],
+    *,
+    build_status: str = "pass",
+    correctness_status: str = "pass",
+    timing_status: str = "pass",
+    has_control: bool = True,
+    lost_failure_count: int = 0,
+    derive_lost_failures_from_cases: bool = True,
+    min_normal_improvement_ms: float = DEFAULT_TWAP_MIN_NORMAL_P95_IMPROVEMENT_MS,
+    max_normal_regression_ms: float = DEFAULT_TWAP_MAX_NORMAL_P95_REGRESSION_MS,
+    max_stress_regression_ms: float = DEFAULT_TWAP_MAX_STRESS_P95_REGRESSION_MS,
+) -> ThresholdConsistencyResult:
+    """Mirror twap_headless_remote.sh write_summary's auto-decision logic."""
+
+    normal_cases: list[ThresholdCaseDelta] = []
+    stress_cases: list[ThresholdCaseDelta] = []
+    derived_lost_failures = int(lost_failure_count)
+
+    for row in case_deltas:
+        if not isinstance(row, dict):
+            continue
+        case = str(row.get("case") or "")
+        delta = _float_or_none(row.get("p95_delta_ms"))
+        control_lost = _int_or_zero(row.get("control_lost"))
+        candidate_lost = _int_or_zero(row.get("candidate_lost"))
+        control_unknown = _int_or_zero(row.get("control_unknown_pushes"))
+        candidate_unknown = _int_or_zero(row.get("candidate_unknown_pushes"))
+        if derive_lost_failures_from_cases and (
+            control_lost or candidate_lost or control_unknown or candidate_unknown or _twap_status_failed(row)
+        ):
+            derived_lost_failures += 1
+
+        interval_ms = twap_case_interval_ms(case)
+        if interval_ms is None:
+            continue
+        if interval_ms >= 20:
+            normal_cases.append(ThresholdCaseDelta(case=case, p95_delta_ms=delta, lane="normal"))
+        elif interval_ms <= 5:
+            stress_cases.append(ThresholdCaseDelta(case=case, p95_delta_ms=delta, lane="stress"))
+
+    normal_improved = bool(normal_cases) and all(
+        delta.p95_delta_ms is not None and delta.p95_delta_ms <= -min_normal_improvement_ms
+        for delta in normal_cases
+    )
+    normal_regression_ok = all(
+        delta.p95_delta_ms is not None and delta.p95_delta_ms <= max_normal_regression_ms
+        for delta in normal_cases
+    )
+    stress_regression_ok = all(
+        delta.p95_delta_ms is not None and delta.p95_delta_ms <= max_stress_regression_ms
+        for delta in stress_cases
+    )
+    accepted = (
+        build_status == "pass"
+        and correctness_status == "pass"
+        and timing_status == "pass"
+        and derived_lost_failures == 0
+        and has_control
+        and normal_improved
+        and stress_regression_ok
+    )
+    rejected = derived_lost_failures > 0 or not normal_regression_ok or not stress_regression_ok
+    decision = "promotion_candidate" if accepted else "rejected" if rejected else "screening_only"
+    return ThresholdConsistencyResult(
+        decision=decision,
+        accepted=accepted,
+        lost_failure_count=derived_lost_failures,
+        has_control=has_control,
+        normal_frequency_p95_improved=normal_improved,
+        normal_frequency_p95_regression_ok=normal_regression_ok,
+        stress_p95_regression_ok=stress_regression_ok,
+        normal_cases=tuple(normal_cases),
+        stress_cases=tuple(stress_cases),
+    )
+
+
+class TwapAdapter:
+    """Translate TWAP case-delta summaries into the threshold-consistency judge."""
+
+    @staticmethod
+    def threshold_result(
+        summary: dict[str, object],
+        *,
+        min_normal_improvement_ms: float = DEFAULT_TWAP_MIN_NORMAL_P95_IMPROVEMENT_MS,
+        max_normal_regression_ms: float = DEFAULT_TWAP_MAX_NORMAL_P95_REGRESSION_MS,
+        max_stress_regression_ms: float = DEFAULT_TWAP_MAX_STRESS_P95_REGRESSION_MS,
+    ) -> ThresholdConsistencyResult:
+        raw_deltas = summary.get("case_deltas") or summary.get("twap_case_deltas") or []
+        case_deltas = raw_deltas if isinstance(raw_deltas, list) else []
+        has_shell_lost_count = "lost_failure_count" in summary
+        return threshold_consistency(
+            case_deltas,
+            build_status=str(summary.get("build_status") or "pass"),
+            correctness_status=str(summary.get("correctness_status") or "pass"),
+            timing_status=str(summary.get("timing_status") or "pass"),
+            has_control=bool(summary.get("has_control", True)),
+            lost_failure_count=_int_or_zero(summary.get("lost_failure_count")),
+            derive_lost_failures_from_cases=not has_shell_lost_count,
+            min_normal_improvement_ms=min_normal_improvement_ms,
+            max_normal_regression_ms=max_normal_regression_ms,
+            max_stress_regression_ms=max_stress_regression_ms,
+        )
 
 
 class PsiTimingAdapter:

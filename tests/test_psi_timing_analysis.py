@@ -14,10 +14,13 @@ from psi_headless_auto_loop import apply_change_class_policy, judge_verdict  # n
 from psi_timing_analysis import (  # noqa: E402
     ConfidenceTierResult,
     PsiTimingAdapter,
+    TwapAdapter,
     confidence_tier,
     evidence_fields,
     judge_scorecard,
     summarize_paired_timing,
+    threshold_consistency,
+    twap_case_interval_ms,
     validate_class_a,
 )
 
@@ -559,6 +562,152 @@ class PsiScorecardStructureTests(unittest.TestCase):
 
         verdict = judge_scorecard(scorecard)
         self.assertEqual(verdict.verdict, "accepted")
+
+
+class TwapThresholdConsistencyTests(unittest.TestCase):
+    def test_case_interval_parser_matches_shell_shape(self) -> None:
+        self.assertEqual(twap_case_interval_ms("100_i50_s4"), 50)
+        self.assertEqual(twap_case_interval_ms("500_i5"), 5)
+        self.assertEqual(twap_case_interval_ms("100_i20_s16_extra"), 20)
+        self.assertIsNone(twap_case_interval_ms("bad_case"))
+
+    def test_all_normal_cases_improve_and_stress_ok_promotes(self) -> None:
+        result = threshold_consistency(
+            [
+                {"case": "100_i50_s4", "p95_delta_ms": -1.2},
+                {"case": "500_i20_s4", "p95_delta_ms": -2.0},
+                {"case": "500_i5_s4", "p95_delta_ms": 4.5},
+            ],
+            build_status="pass",
+            correctness_status="pass",
+            timing_status="pass",
+            has_control=True,
+        )
+
+        self.assertEqual(result.decision, "promotion_candidate")
+        self.assertTrue(result.accepted)
+        self.assertTrue(result.normal_frequency_p95_improved)
+        self.assertTrue(result.stress_p95_regression_ok)
+
+    def test_normal_case_without_minimum_improvement_is_screening_only(self) -> None:
+        result = threshold_consistency(
+            [
+                {"case": "100_i50_s4", "p95_delta_ms": -0.4},
+                {"case": "500_i20_s4", "p95_delta_ms": -2.0},
+                {"case": "500_i5_s4", "p95_delta_ms": 4.5},
+            ],
+            build_status="pass",
+            correctness_status="pass",
+            timing_status="pass",
+            has_control=True,
+        )
+
+        self.assertEqual(result.decision, "screening_only")
+        self.assertFalse(result.accepted)
+        self.assertFalse(result.normal_frequency_p95_improved)
+        self.assertTrue(result.normal_frequency_p95_regression_ok)
+
+    def test_stress_regression_rejects(self) -> None:
+        result = threshold_consistency(
+            [
+                {"case": "100_i50_s4", "p95_delta_ms": -1.5},
+                {"case": "500_i5_s4", "p95_delta_ms": 5.5},
+            ],
+            build_status="pass",
+            correctness_status="pass",
+            timing_status="pass",
+            has_control=True,
+        )
+
+        self.assertEqual(result.decision, "rejected")
+        self.assertFalse(result.stress_p95_regression_ok)
+
+    def test_lost_unknown_or_non_pass_status_rejects(self) -> None:
+        lost = threshold_consistency(
+            [{"case": "100_i50_s4", "p95_delta_ms": -2.0, "candidate_lost": "1"}],
+            build_status="pass",
+            correctness_status="pass",
+            timing_status="pass",
+            has_control=True,
+        )
+        unknown = threshold_consistency(
+            [{"case": "100_i50_s4", "p95_delta_ms": -2.0, "candidate_unknown_pushes": "1"}],
+            build_status="pass",
+            correctness_status="pass",
+            timing_status="pass",
+            has_control=True,
+        )
+        status = threshold_consistency(
+            [{"case": "100_i50_s4", "p95_delta_ms": -2.0, "status": "WARN_UNKNOWN_PUSH"}],
+            build_status="pass",
+            correctness_status="pass",
+            timing_status="pass",
+            has_control=True,
+        )
+
+        self.assertEqual(lost.decision, "rejected")
+        self.assertEqual(unknown.decision, "rejected")
+        self.assertEqual(status.decision, "rejected")
+        self.assertEqual(lost.lost_failure_count, 1)
+        self.assertEqual(unknown.lost_failure_count, 1)
+        self.assertEqual(status.lost_failure_count, 1)
+
+    def test_build_or_correctness_fail_without_threshold_failure_screens_like_shell_auto(self) -> None:
+        build_failed = threshold_consistency(
+            [{"case": "100_i50_s4", "p95_delta_ms": -2.0}],
+            build_status="failed",
+            correctness_status="pass",
+            timing_status="pass",
+            has_control=True,
+        )
+        correctness_failed = threshold_consistency(
+            [{"case": "100_i50_s4", "p95_delta_ms": -2.0}],
+            build_status="pass",
+            correctness_status="failed",
+            timing_status="pass",
+            has_control=True,
+        )
+
+        self.assertEqual(build_failed.decision, "screening_only")
+        self.assertFalse(build_failed.accepted)
+        self.assertEqual(correctness_failed.decision, "screening_only")
+        self.assertFalse(correctness_failed.accepted)
+
+    def test_twap_adapter_reads_comparison_summary_shape(self) -> None:
+        result = TwapAdapter.threshold_result(
+            {
+                "build_status": "pass",
+                "correctness_status": "pass",
+                "timing_status": "pass",
+                "has_control": True,
+                "lost_failure_count": 0,
+                "case_deltas": [
+                    {"case": "100_i50_s4", "p95_delta_ms": -1.1},
+                    {"case": "500_i5_s4", "p95_delta_ms": 0.0},
+                ],
+            }
+        )
+
+        self.assertEqual(result.decision, "promotion_candidate")
+        self.assertEqual([case.case for case in result.normal_cases], ["100_i50_s4"])
+        self.assertEqual([case.case for case in result.stress_cases], ["500_i5_s4"])
+
+    def test_twap_adapter_trusts_shell_lost_failure_count_without_double_counting(self) -> None:
+        result = TwapAdapter.threshold_result(
+            {
+                "build_status": "pass",
+                "correctness_status": "pass",
+                "timing_status": "pass",
+                "has_control": True,
+                "lost_failure_count": 1,
+                "case_deltas": [
+                    {"case": "100_i50_s4", "p95_delta_ms": -2.0, "candidate_lost": "1"},
+                ],
+            }
+        )
+
+        self.assertEqual(result.decision, "rejected")
+        self.assertEqual(result.lost_failure_count, 1)
 
 
 if __name__ == "__main__":
