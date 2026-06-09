@@ -2082,6 +2082,8 @@ def judge_verdict(batch_state: dict[str, Any]) -> tuple[str, str]:
         return _judge_twap_threshold_verdict(batch_state, twap_stats)
 
     decision = (batch_state.get("decision") or "").lower()
+    if decision in {"needs_paired_evidence", "screening_only"}:
+        return decision, batch_state.get("paired_evidence_reason", "") or "paired A/B evidence is missing or screening-only"
     if decision == "rejected":
         return "rejected", batch_state.get("reason", "") or "remote TWAP gate rejected candidate"
 

@@ -308,6 +308,22 @@ class TwapHarnessReplayTests(unittest.TestCase):
         self.assertEqual(verdict, "screening_only")
         self.assertEqual(reason, "TWAP threshold-consistency gate is screening-only")
 
+    def test_twap_empty_case_summary_preserves_remote_screening_only(self) -> None:
+        batch_state = {
+            "compare_status": "pass",
+            "decision": "screening_only",
+            "reason": "completed",
+            "timing_status": "pass",
+            "lost_failure_count": 0,
+            "has_control": False,
+            "twap_case_deltas": [],
+        }
+
+        verdict, reason = loop.judge_verdict(batch_state)
+
+        self.assertEqual(verdict, "screening_only")
+        self.assertEqual(reason, "paired A/B evidence is missing or screening-only")
+
     def test_twap_threshold_promotion_still_requires_synced_same_source_control(self) -> None:
         batch_state = {
             "compare_status": "pass",
