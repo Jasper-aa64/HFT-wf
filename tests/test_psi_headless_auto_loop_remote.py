@@ -502,6 +502,112 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
             manifest = auto_loop.read_json(run_dir / "patches" / "patch_manifest.json")
             self.assertEqual(manifest["entries"][0]["status"], "failed")
 
+    def test_iteration_step_escalates_gray_noisy_candidate_to_next_sample_depth(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="factor_auto_loop_escalate_") as raw_dir:
+            run_dir = Path(raw_dir)
+            candidate = {
+                "candidate_id": "candidate",
+                "lane": "evidence",
+                "target": "handlerData.timestamp",
+                "touched_files": ["PsiFactorPipline/PsiReadWrite.cpp"],
+                "hypothesis": "probe",
+                "expected_effect": "probe",
+                "semantic_risk": "low",
+            }
+            args = SimpleNamespace(
+                remote_host="devbox",
+                remote_batch_script="scripts/psi_headless_remote.sh",
+                batch_script=REPO_ROOT / "scripts" / "psi_headless_remote.sh",
+                dry_run=False,
+                candidate_seed_file="",
+                candidate_ledger="",
+                patch_command="builtin:fake-nonempty",
+                source_root=str(run_dir / "source"),
+                candidate_workspace="",
+                reuse_candidate_workspace=False,
+                quiet_retry_min_control_samples=20,
+                quiet_retry_control_stdev_ms=800.0,
+                quiet_retry_control_range_ms=2000.0,
+                remote_timeout_seconds=30,
+                twap_endpoint="",
+                measure_runs=4,
+            )
+            source = Path(args.source_root)
+            source.mkdir()
+            (source / "PsiFactorPipline").mkdir()
+            (source / "PsiFactorPipline" / "PsiReadWrite.cpp").write_text("int x = 0;\n", encoding="utf-8")
+
+            def fake_generate_candidates(*_args, **_kwargs):
+                return {"evidence": [candidate], "insight": [], "combination": []}
+
+            def fake_remote_batch(*_args, **_kwargs):
+                return 0, run_dir / "iterations" / "iter_001_candidate", {
+                    "status": "stopped",
+                    "batch_status": "completed",
+                    "build_status": "pass",
+                    "compare_status": "pass",
+                    "timing_status": "NOISY_PENDING",
+                    "timing_verdict": "NOISY_PENDING",
+                    "noise_flag": "NOISY",
+                    "paired_sample_count": 4,
+                    "median_delta_ms": 805.5,
+                    "bootstrap_ci_low_ms": 324.0,
+                    "bootstrap_ci_high_ms": 1392.0,
+                    "control_median_ms": 58000.0,
+                    "paired_range_ms": 1068.0,
+                    "paired_stdev_ms": 438.0,
+                    "control_samples_ms": [58686, 57742, 57673, 57972],
+                    "candidate_samples_ms": [57294, 56894, 56910, 57648],
+                    "candidate_median_ms": 57102.0,
+                    "compare_result": "pass",
+                }
+
+            with (
+                mock.patch.object(auto_loop, "seed_profile_if_missing"),
+                mock.patch.object(auto_loop, "generate_candidates", side_effect=fake_generate_candidates),
+                mock.patch.object(auto_loop, "call_remote_batch", side_effect=fake_remote_batch),
+            ):
+                _candidate, verdict, _iter_stop, _lanes, _batch_state = auto_loop.iteration_step(
+                    args,
+                    run_dir,
+                    1,
+                    set(),
+                    set(),
+                    "host",
+                )
+
+            self.assertEqual(verdict, "NOISY_PENDING")
+            retry_rows = auto_loop.read_tsv(run_dir / "retry_conditions.tsv")
+            self.assertEqual(retry_rows[0]["status"], "ESCALATE")
+            self.assertEqual(retry_rows[0]["next_measure_runs"], "8")
+            self.assertIn("escalate to m8", retry_rows[0]["required_condition"])
+
+    def test_measure_runs_override_deepens_retry_and_restores_args(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="factor_auto_loop_measure_override_") as raw_dir:
+            run_dir = Path(raw_dir)
+            args = SimpleNamespace(measure_runs=4)
+            candidate = {
+                "candidate_id": "retry_timestamp",
+                "lane": "evidence",
+                "target": "handlerData.timestamp",
+                "measure_runs_override": 8,
+            }
+
+            def fake_remote_batch(call_args, _run_dir, _candidate, _iteration):
+                self.assertEqual(call_args.measure_runs, 8)
+                return 0, run_dir / "iterations" / "iter_002_retry_timestamp", {"timing_verdict": "neutral"}
+
+            with mock.patch.object(auto_loop, "call_remote_batch", side_effect=fake_remote_batch):
+                rc, _iter_dir, batch_state = auto_loop._call_remote_batch_with_measure_override(
+                    args,
+                    run_dir,
+                    candidate,
+                    2,
+                )
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(batch_state["timing_verdict"], "neutral")
+            self.assertEqual(args.measure_runs, 4)
 
     def test_merge_comparison_summary_bridges_paired_samples_to_sample_lists(self) -> None:
         """_merge_comparison_summary must restore control_samples_ms / candidate_samples_ms

@@ -32,6 +32,7 @@ DEFAULT_SIGN_MIN = 0.9
 DEFAULT_TWAP_MIN_NORMAL_P95_IMPROVEMENT_MS = 1.0
 DEFAULT_TWAP_MAX_NORMAL_P95_REGRESSION_MS = 1.0
 DEFAULT_TWAP_MAX_STRESS_P95_REGRESSION_MS = 5.0
+DEFAULT_SAMPLE_ESCALATION_STEPS = (4, 8, 12)
 
 
 @dataclass(frozen=True)
@@ -227,6 +228,21 @@ class ConfidenceTierResult:
 
 
 @dataclass(frozen=True)
+class SampleEscalationDecision:
+    """Decision for weak-but-promising timing evidence.
+
+    action:
+      - ESCALATE: collect the next configured sample depth before final park.
+      - PARK: do not collect deeper samples for this evidence shape.
+      - NO_ACTION: verdict is already decided or not in the escalation path.
+    """
+
+    action: str
+    next_sample_count: int | None
+    reason: str
+
+
+@dataclass(frozen=True)
 class RegressionCheck:
     name: str
     measured: float | None
@@ -371,6 +387,85 @@ def confidence_tier(
         ci_width=ci_width,
         decisiveness=decisiveness,
         sign_consistency=sign_consistency,
+    )
+
+
+def next_sample_escalation_depth(
+    current_sample_count: int,
+    *,
+    steps: tuple[int, ...] = DEFAULT_SAMPLE_ESCALATION_STEPS,
+) -> int | None:
+    for step in steps:
+        if current_sample_count < step:
+            return step
+    return None
+
+
+def sample_escalation_decision(
+    *,
+    verdict: str,
+    correctness_pass: bool,
+    paired_sample_count: int,
+    median_delta_ms: float | None,
+    bootstrap_ci_low_ms: float | None,
+    bootstrap_ci_high_ms: float | None,
+    delta_min_ms: float,
+    decisiveness: float | None = None,
+    decisive_k: float = DEFAULT_DECISIVE_K,
+) -> SampleEscalationDecision:
+    """Classify weak timing evidence as deeper-sampling eligible or terminal.
+
+    This is deliberately downstream of the confidence-tier verdict. It never
+    accepts a candidate; it only decides whether a NOISY_PENDING candidate
+    should be retried at the next sample depth before being parked.
+    """
+
+    if verdict != "NOISY_PENDING":
+        return SampleEscalationDecision("NO_ACTION", None, f"verdict={verdict} is already decided")
+    if not correctness_pass:
+        return SampleEscalationDecision("PARK", None, "correctness did not pass")
+
+    next_depth = next_sample_escalation_depth(paired_sample_count)
+    if next_depth is None:
+        return SampleEscalationDecision("PARK", None, f"sample depth {paired_sample_count} is at escalation cap")
+
+    if median_delta_ms is None or median_delta_ms <= 0.0:
+        return SampleEscalationDecision("PARK", None, "median delta is not positive")
+    if bootstrap_ci_low_ms is None or bootstrap_ci_high_ms is None:
+        return SampleEscalationDecision("PARK", None, "bootstrap CI is unavailable")
+
+    margin = bootstrap_ci_low_ms - delta_min_ms
+    if margin < 0.0:
+        return SampleEscalationDecision(
+            "PARK",
+            None,
+            f"CI floor does not clear delta_min_ms (margin={margin:.3f}ms)",
+        )
+
+    ci_width = bootstrap_ci_high_ms - bootstrap_ci_low_ms
+    if decisiveness is None:
+        if ci_width > 0.0:
+            decisiveness = margin / ci_width
+        elif margin > 0.0:
+            decisiveness = None
+        else:
+            decisiveness = 0.0
+
+    if decisiveness is None or decisiveness >= decisive_k:
+        return SampleEscalationDecision(
+            "NO_ACTION",
+            None,
+            "evidence is decisive enough for the existing verdict ladder",
+        )
+
+    return SampleEscalationDecision(
+        "ESCALATE",
+        next_depth,
+        (
+            f"weak-but-promising evidence: median_delta_ms={median_delta_ms:.3f}, "
+            f"CI_low={bootstrap_ci_low_ms:.3f}, delta_min_ms={delta_min_ms:.3f}, "
+            f"decisiveness={decisiveness:.3f}<{decisive_k:.3f}; escalate to m{next_depth}"
+        ),
     )
 
 

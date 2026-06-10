@@ -59,7 +59,7 @@ from psi_patch_queue import (
     set_status as set_patch_status,
     snapshot_worktree,
 )
-from psi_timing_analysis import TwapAdapter, validate_class_a
+from psi_timing_analysis import TwapAdapter, sample_escalation_decision, validate_class_a
 from psi_timing_history import (
     HISTORY_FIELDNAMES,
     default_host_key,
@@ -311,6 +311,7 @@ RETRY_CONDITIONS_FIELDS = [
     "status",
     "noise_flag",
     "retry_after",
+    "next_measure_runs",
     "required_condition",
     "last_exit_reason",
     "notes",
@@ -442,7 +443,7 @@ def quiet_retry_ready_targets(
     retry_rows = [
         row
         for row in read_tsv(run_dir / "retry_conditions.tsv")
-        if (row.get("status") or "").strip() == "NOISY_PENDING"
+        if (row.get("status") or "").strip() == "ESCALATE"
     ]
     gate: dict[str, Any] = {
         "updated_at": utc_now(),
@@ -1849,6 +1850,7 @@ def record_retry_condition(
     *,
     status: str,
     noise_flag: str,
+    next_measure_runs: int | None = None,
     required_condition: str,
     last_exit_reason: str,
     notes: str,
@@ -1861,7 +1863,8 @@ def record_retry_condition(
         "target": candidate["target"],
         "status": status,
         "noise_flag": noise_flag,
-        "retry_after": "next quiet same-host window" if status == "NOISY_PENDING" else "when new evidence appears",
+        "retry_after": "next quiet same-host window" if status == "ESCALATE" else "when new evidence appears",
+        "next_measure_runs": str(next_measure_runs or ""),
         "required_condition": required_condition,
         "last_exit_reason": last_exit_reason,
         "notes": notes,
@@ -2267,6 +2270,42 @@ def seed_twap_profile_if_missing(args: argparse.Namespace, run_dir: Path) -> Non
         raise SystemExit(f"TWAP profile generator failed rc={result.returncode}; see {log_path}")
 
 
+def _delta_min_from_batch(batch_state: dict[str, Any]) -> float:
+    ci_low = _coerce_float(batch_state.get("bootstrap_ci_low_ms"))
+    margin = _coerce_float(batch_state.get("confidence_margin_ms"))
+    if ci_low is not None and margin is not None:
+        return ci_low - margin
+    control_median = _coerce_float(batch_state.get("control_median_ms"))
+    if control_median is not None and control_median > 0.0:
+        return control_median * 0.005
+    return 0.0
+
+
+def _measure_runs_override(candidate: dict[str, Any]) -> int | None:
+    value = _coerce_float(candidate.get("measure_runs_override"))
+    if value is None or value <= 0:
+        return None
+    return int(value)
+
+
+def _call_remote_batch_with_measure_override(
+    args: argparse.Namespace,
+    run_dir: Path,
+    candidate: dict[str, Any],
+    iteration: int,
+) -> tuple[int, Path, dict[str, Any]]:
+    override = _measure_runs_override(candidate)
+    if override is None:
+        return call_remote_batch(args, run_dir, candidate, iteration)
+
+    previous = args.measure_runs
+    args.measure_runs = max(int(previous), override)
+    try:
+        return call_remote_batch(args, run_dir, candidate, iteration)
+    finally:
+        args.measure_runs = previous
+
+
 def iteration_step(
     args: argparse.Namespace,
     run_dir: Path,
@@ -2347,7 +2386,7 @@ def iteration_step(
         return candidate, "needs_patch", "", lanes, batch_state
 
     update_heartbeat(run_dir, "remote_batch", f"running iteration {iteration} candidate {candidate['candidate_id']}")
-    rc, _iter_dir, batch_state = call_remote_batch(args, run_dir, candidate, iteration)
+    rc, _iter_dir, batch_state = _call_remote_batch_with_measure_override(args, run_dir, candidate, iteration)
     if rc != 0 and not args.dry_run:
         if batch_state:
             retry_condition = str(batch_state.get("reason") or batch_state.get("timing_status") or f"remote rc={rc}")
@@ -2414,24 +2453,52 @@ def iteration_step(
             note="accepted_noisy_single; queued for validation",
         )
     elif verdict == "NOISY_PENDING":
+        correctness_pass = (
+            str(batch_state.get("build_status") or "").strip().lower() == "pass"
+            and str(batch_state.get("compare_status") or "").strip().lower() == "pass"
+        )
+        escalation = sample_escalation_decision(
+            verdict=verdict,
+            correctness_pass=correctness_pass,
+            paired_sample_count=int(_coerce_float(batch_state.get("paired_sample_count")) or 0),
+            median_delta_ms=_coerce_float(batch_state.get("median_delta_ms")),
+            bootstrap_ci_low_ms=_coerce_float(batch_state.get("bootstrap_ci_low_ms")),
+            bootstrap_ci_high_ms=_coerce_float(batch_state.get("bootstrap_ci_high_ms")),
+            delta_min_ms=_delta_min_from_batch(batch_state),
+            decisiveness=_coerce_float(batch_state.get("confidence_decisiveness")),
+        )
+        retry_status = "ESCALATE" if escalation.action == "ESCALATE" else "NOISY_PENDING"
+        next_measure_runs = escalation.next_sample_count if escalation.action == "ESCALATE" else None
+        retry_reason = escalation.reason if escalation.action == "ESCALATE" else retry_condition
         noisy_notes = (
             f"candidate_id={candidate['candidate_id']};"
             f" paired_sample_count={batch_state.get('paired_sample_count', '')};"
             f" median_delta_ms={batch_state.get('median_delta_ms', '')};"
             f" paired_range_ms={batch_state.get('paired_range_ms', '')};"
             f" paired_stdev_ms={batch_state.get('paired_stdev_ms', '')};"
+            f" sample_escalation={escalation.action};"
             " candidate-level pause; loop continues"
         )
         record_retry_condition(
             run_dir,
             candidate,
-            status="NOISY_PENDING",
+            status=retry_status,
             noise_flag="NOISY",
-            required_condition=retry_condition,
+            next_measure_runs=next_measure_runs,
+            required_condition=retry_reason,
             last_exit_reason="",
             notes=noisy_notes,
         )
-        set_patch_status(run_dir, candidate["candidate_id"], "reverted", note="noisy; reverted pending rerun")
+        set_patch_status(
+            run_dir,
+            candidate["candidate_id"],
+            "reverted",
+            note=(
+                f"sample escalation pending m{next_measure_runs}"
+                if next_measure_runs
+                else "noisy; reverted pending rerun"
+            ),
+        )
     elif verdict == "rejected":
         set_patch_status(run_dir, candidate["candidate_id"], "reverted", note="rejected; reverted")
     elif verdict == "infra_blocked":
@@ -2496,9 +2563,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--first-accepted-stop", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--repeated-infra-failures", type=int, default=2)
     parser.add_argument("--stack-throttle", type=int, default=3, help="Try a neutral stack at most every N iterations")
-    parser.add_argument("--quiet-retry-min-control-samples", type=int, default=20, help="Minimum same-host control samples required before retrying a NOISY_PENDING candidate.")
-    parser.add_argument("--quiet-retry-control-stdev-ms", type=float, default=800.0, help="Maximum same-host control median stdev before retrying a NOISY_PENDING candidate.")
-    parser.add_argument("--quiet-retry-control-range-ms", type=float, default=2000.0, help="Maximum same-host control sample range before retrying a NOISY_PENDING candidate.")
+    parser.add_argument("--quiet-retry-min-control-samples", type=int, default=20, help="Minimum same-host control samples required before retrying an ESCALATE candidate.")
+    parser.add_argument("--quiet-retry-control-stdev-ms", type=float, default=800.0, help="Maximum same-host control median stdev before retrying an ESCALATE candidate.")
+    parser.add_argument("--quiet-retry-control-range-ms", type=float, default=2000.0, help="Maximum same-host control sample range before retrying an ESCALATE candidate.")
     parser.add_argument("--host-key", default="")
     parser.add_argument("--root")
     parser.add_argument("--env-file")

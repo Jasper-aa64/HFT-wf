@@ -62,9 +62,10 @@ class Candidate:
     stack_members: list[str] = field(default_factory=list)
     stack_compatibility: str = "single"
     rank_score: float = 0.0
+    measure_runs_override: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "candidate_id": self.candidate_id,
             "lane": self.lane,
             "hypothesis": self.hypothesis,
@@ -77,6 +78,9 @@ class Candidate:
             "stack_compatibility": self.stack_compatibility,
             "rank_score": self.rank_score,
         }
+        if self.measure_runs_override is not None:
+            payload["measure_runs_override"] = self.measure_runs_override
+        return payload
 
 
 def read_tsv(path: Path) -> list[dict[str, str]]:
@@ -355,19 +359,21 @@ def _retry_lane(
             continue
         if _is_blocked(target, cooldown_rows):
             continue
-        if (row.get("status") or "").strip() != "NOISY_PENDING":
+        status = (row.get("status") or "").strip()
+        if status != "ESCALATE":
             continue
+        next_measure_runs = int(_parse_float(row.get("next_measure_runs"), 0.0))
         attempt = latest_attempts.get(target, {})
         touched = _split_touched(attempt.get("touched_files") or target)
         candidate = Candidate(
             candidate_id=f"retry_{_safe_token(target)}",
             lane="evidence",
             hypothesis=(
-                f"quiet-window retry for prior NOISY_PENDING target {target}; "
-                "rerun the same real patch only when host noise gates pass."
+                f"quiet-window retry for prior {status} target {target}; "
+                "rerun only when host noise gates pass."
             ),
             target=target,
-            expected_effect=attempt.get("notes") or "m24 repeat under quiet-host gate",
+            expected_effect=attempt.get("notes") or "repeat under quiet-host gate",
             semantic_risk=attempt.get("semantic_risk") or "low",
             touched_files=touched or [target],
             source_evidence={
@@ -376,6 +382,7 @@ def _retry_lane(
                 "latest_attempt": attempt,
             },
             rank_score=10_000.0 + len(candidates),
+            measure_runs_override=next_measure_runs if next_measure_runs > 0 else None,
         )
         candidates.append(candidate)
         if len(candidates) >= top_k:

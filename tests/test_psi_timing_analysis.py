@@ -18,6 +18,7 @@ from psi_timing_analysis import (  # noqa: E402
     confidence_tier,
     evidence_fields,
     judge_scorecard,
+    sample_escalation_decision,
     summarize_paired_timing,
     threshold_consistency,
     twap_case_interval_ms,
@@ -369,6 +370,53 @@ class ConfidenceTierUnitTests(unittest.TestCase):
         )
         self.assertEqual(result.tier, "decisive")
         self.assertIsNone(result.decisiveness)  # sentinel for ∞
+
+
+class SampleEscalationDecisionTests(unittest.TestCase):
+    def test_m4_gray_timestamp_shape_escalates_instead_of_parking(self) -> None:
+        decision = sample_escalation_decision(
+            verdict="NOISY_PENDING",
+            correctness_pass=True,
+            paired_sample_count=4,
+            median_delta_ms=805.5,
+            bootstrap_ci_low_ms=324.0,
+            bootstrap_ci_high_ms=1392.0,
+            delta_min_ms=290.0,
+            decisive_k=1.0,
+        )
+
+        self.assertEqual(decision.action, "ESCALATE")
+        self.assertEqual(decision.next_sample_count, 8)
+
+    def test_obvious_noise_does_not_escalate(self) -> None:
+        decision = sample_escalation_decision(
+            verdict="NOISY_PENDING",
+            correctness_pass=True,
+            paired_sample_count=4,
+            median_delta_ms=20.0,
+            bootstrap_ci_low_ms=-300.0,
+            bootstrap_ci_high_ms=400.0,
+            delta_min_ms=290.0,
+            decisive_k=1.0,
+        )
+
+        self.assertEqual(decision.action, "PARK")
+        self.assertIsNone(decision.next_sample_count)
+
+    def test_decisive_candidate_does_not_enter_escalation_path(self) -> None:
+        decision = sample_escalation_decision(
+            verdict="accepted",
+            correctness_pass=True,
+            paired_sample_count=8,
+            median_delta_ms=7400.0,
+            bootstrap_ci_low_ms=6800.0,
+            bootstrap_ci_high_ms=7800.0,
+            delta_min_ms=290.0,
+            decisive_k=1.0,
+        )
+
+        self.assertEqual(decision.action, "NO_ACTION")
+        self.assertIsNone(decision.next_sample_count)
 
 
 class ConfidenceTierIntegrationTests(unittest.TestCase):

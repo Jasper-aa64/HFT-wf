@@ -149,6 +149,25 @@ high relative range OR mid-run contamination
   -> do not accept
 ```
 
+Weak-but-promising evidence should be sampled deeper before terminal parking:
+
+```text
+build pass + compare pass + NOISY_PENDING
++ median_delta_ms > 0
++ bootstrap_ci_low_ms >= delta_min_ms
++ confidence decisiveness below the accepted threshold
+  -> ESCALATE retry condition
+  -> rerun at the next configured sample depth: m4 -> m8 -> m12
+  -> only after m12 remains unresolved, park as terminal NOISY_PENDING
+```
+
+Sample escalation must not change promotion criteria. It only chooses
+`deeper sampling vs terminal park` for an already non-accepted candidate.
+The deeper retry must pass the same quiet-host gate as any other evidence
+retry. If deeper sampling collapses the effect toward zero, crosses the
+value threshold, or breaks sign direction, the existing verdict ladder should
+reject, neutralize, or park it normally.
+
 ### 4. Validation & Error Matrix
 
 | Condition | Classification | Accepted | Retry Meaning |
@@ -159,6 +178,8 @@ high relative range OR mid-run contamination
 | validation lock held by another run | `infra_blocked_by_validation_lock` | no | do not start timing |
 | active runner appears mid-run | `UNSTABLE_MEASUREMENT` / invalid run | no | rerun only under lock |
 | median positive but `noise_flag=NOISY`, single run | `accepted_noisy_single` when statistically conclusive | no | queued for validation replication |
+| median positive and CI floor clears `delta_min_ms`, but confidence is underpowered before m12 | `ESCALATE` retry condition | no | rerun at next sample depth under quiet gate |
+| same gray-zone shape persists at m12 | `NOISY_PENDING` | no | terminal park until manual review or new evidence |
 | median positive but `noise_flag=NOISY`, replicated evidence | `accepted_noisy_replicated` when statistically conclusive | yes (shared-host, non-bare-metal) | promoted with caveat |
 | paired/control relative range too high | `UNSTABLE_MEASUREMENT` | no | measurement pipeline issue |
 | clean positive timing with all gates pass | `accepted_candidate` | yes | manual risk review if required |
@@ -206,6 +227,11 @@ When changing harness code in this area, add or update tests that assert:
 - a run cannot release another run's lock;
 - active runner / mid-run contamination is recorded as measurement-quality
   failure, not patch failure;
+- gray-zone `NOISY_PENDING` evidence with correctness pass, positive median,
+  and CI floor above `delta_min_ms` writes an `ESCALATE` retry row with the
+  next sample depth instead of terminal parking;
+- obvious noise with CI crossing the value threshold does not escalate;
+- already accepted evidence does not pass through the escalation path;
 - verdict replay does not let `timing_status=pass` override rejected or noisy
   candidate decisions;
 - stack candidates preserve `stack_members` in manifests and ledgers.
