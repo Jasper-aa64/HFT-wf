@@ -1183,6 +1183,19 @@ if paired_evidence is not None:
         "bootstrap_ci_low_ms": paired_fields.get("bootstrap_ci_low_ms", ""),
         "bootstrap_ci_high_ms": paired_fields.get("bootstrap_ci_high_ms", ""),
         "noise_flag": paired_evidence.noise_flag,
+        "replicated": paired_fields.get("replicated", ""),
+        "delta_min_ms_used": paired_fields.get("delta_min_ms_used", ""),
+        "decisive_k": paired_fields.get("decisive_k", ""),
+        "sign_min": paired_fields.get("sign_min", ""),
+        "escalation_steps": paired_fields.get("escalation_steps", ""),
+        "naive_k1_first_delta_ms": paired_fields.get("naive_k1_first_delta_ms", ""),
+        "naive_k1_would_accept": paired_fields.get("naive_k1_would_accept", ""),
+        "host_id": paired_fields.get("host_id", ""),
+        "env_class": paired_fields.get("env_class", ""),
+        "control_stdev_ms": paired_fields.get("control_stdev_ms", ""),
+        "control_range_ms": paired_fields.get("control_range_ms", ""),
+        "confidence_tier": paired_fields.get("confidence_tier", ""),
+        "confidence_decisiveness": paired_fields.get("confidence_decisiveness", ""),
     }
 
 comparison_summary = {

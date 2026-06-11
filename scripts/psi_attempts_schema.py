@@ -127,3 +127,27 @@ ATTEMPTS_FIELDNAMES: list[str] = [
     "generator_model",
     "generator_session",
 ]
+
+
+OPTIMIZATION_LEDGER_FIELDNAMES: list[str] = [
+    "candidate_id",
+    "lane",
+    "judge_kind",
+    "verdict",
+    "naive_k1_would_accept",
+    "naive_k1_first_delta_ms",
+    "delta_min_ms_used",
+    "decisive_k",
+    "sign_min",
+    "escalation_steps",
+    "constants_hash",
+    "host_id",
+    "env_class",
+    "control_stdev_ms",
+    "control_range_ms",
+    "generator_model",
+    "generator_session",
+    "replicated",
+    "artifact_path",
+    "recorded_at",
+]

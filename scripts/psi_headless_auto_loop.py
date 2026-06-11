@@ -53,6 +53,7 @@ from pathlib import Path
 from typing import Any
 
 # Local modules - both live under HFT-wf/scripts/.
+from optimization_ledger import LEDGER_FILENAME, append_ledger_row, build_ledger_row
 from psi_candidate_generator import generate_candidates
 from psi_patch_queue import (
     register_candidate as register_patch,
@@ -111,6 +112,22 @@ PAIRED_NUMERIC_FIELDS = (
     "paired_mean_ms",
 )
 
+PAIRED_LEDGER_FIELDS = (
+    "replicated",
+    "delta_min_ms_used",
+    "decisive_k",
+    "sign_min",
+    "escalation_steps",
+    "naive_k1_first_delta_ms",
+    "naive_k1_would_accept",
+    "host_id",
+    "env_class",
+    "control_stdev_ms",
+    "control_range_ms",
+    "confidence_tier",
+    "confidence_decisiveness",
+)
+
 
 def _coerce_float(value: Any) -> float | None:
     try:
@@ -153,6 +170,11 @@ def _merge_comparison_summary(batch_state: dict[str, Any], summary: dict[str, An
         batch_state["timing_status"] = summary["timing_status"]
     paired = summary.get("paired") if isinstance(summary.get("paired"), dict) else {}
     for field in PAIRED_NUMERIC_FIELDS:
+        value = paired.get(field, summary.get(field))
+        if value is None:
+            continue
+        batch_state[field] = value
+    for field in PAIRED_LEDGER_FIELDS:
         value = paired.get(field, summary.get(field))
         if value is None:
             continue
@@ -1836,6 +1858,26 @@ def record_attempt(
         "notes": timing_notes,
     }
     append_tsv_row(run_dir / "attempts.tsv", row, ATTEMPTS_FIELDS)
+    try:
+        ledger_state = {**batch_state, **row}
+        append_optimization_ledger_row(run_dir, candidate, ledger_state, verdict)
+    except Exception as exc:
+        print(f"warning: optimization ledger append failed: {exc}", file=sys.stderr)
+
+
+def append_optimization_ledger_row(
+    run_dir: Path,
+    candidate: dict[str, Any],
+    batch_state: dict[str, Any],
+    verdict: str,
+) -> None:
+    row = build_ledger_row(
+        candidate=candidate,
+        batch_state=batch_state,
+        verdict=verdict,
+        artifact_path=str(batch_state.get("comparison_summary_path") or ""),
+    )
+    append_ledger_row(run_dir / LEDGER_FILENAME, row)
 
 
 def record_neutral_pool_entry(
