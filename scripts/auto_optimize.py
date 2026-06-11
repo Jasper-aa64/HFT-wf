@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Local contract-v1 harness for Psi automatic optimization runs.
+"""Local contract-v1 harness for automatic optimization runs.
 
 The implementation in this file is intentionally local-only for ``--dry-run``.
 It writes the v1 state surface, synthetic attempts, convergence charts, and the
-dated performance report without touching the Psi business repository or any
+dated performance report without touching the business repository or any
 remote host.
 """
 
@@ -24,7 +24,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from struct import pack
 
-from psi_timing_history import (
+from timing_history import (
     bundle_id_for_path,
     default_host_key,
     history_rows_from_attempt_rows,
@@ -33,8 +33,8 @@ from psi_timing_history import (
     shared_history_path_for_output,
     write_history_artifacts,
 )
-from psi_timing_analysis import evidence_fields, summarize_paired_timing
-from psi_attempts_schema import ATTEMPTS_FIELDNAMES
+from timing_analysis import evidence_fields, summarize_paired_timing
+from attempts_schema import ATTEMPTS_FIELDNAMES
 
 
 TITLE_SUFFIX = "\u6027\u80fd\u4f18\u5316\u62a5\u544a"
@@ -812,7 +812,7 @@ def write_comparison_summary(
     ]
     timing_verdict = str(selected.get("timing_verdict") or "neutral")
     summary = {
-        "schema": "psi_headless_comparison_summary_v2",
+        "schema": "headless_comparison_summary_v2",
         "run_id": run_id,
         "recorded_at": recorded_at,
         "control_role": "control",
@@ -986,14 +986,14 @@ def parse_report_paths(stdout: str) -> tuple[Path, Path]:
         elif line.startswith("pdf="):
             pdf_path = Path(line.split("=", 1)[1].strip())
     if md_path is None:
-        raise RuntimeError("psi_daily_report.py did not print a markdown= path")
+        raise RuntimeError("daily_report.py did not print a markdown= path")
     if pdf_path is None:
         pdf_path = md_path.with_suffix(".pdf")
     return md_path, pdf_path
 
 
 def generate_report(run_dir: Path, report_date: str) -> tuple[Path, Path]:
-    script = repo_root() / "scripts" / "psi_daily_report.py"
+    script = repo_root() / "scripts" / "daily_report.py"
     command = [
         sys.executable,
         str(script),
@@ -1169,7 +1169,7 @@ def run_dry_contract_v1(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run the Psi contract-v1 automatic optimization harness.")
+    parser = argparse.ArgumentParser(description="Run the contract-v1 automatic optimization harness.")
     parser.add_argument("--mode", choices=["headless", "interactive"], required=True)
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--batch-size", choices=["contract-v1"], required=True)

@@ -18,7 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    roots = args.root or [Path(r"C:\psi_lr"), Path(r"C:\factor_lr"), Path(".trellis/tasks")]
+    roots = args.root or [Path(r"C:\optimization_lr"), Path(r"C:\factor_lr"), Path(".trellis/tasks")]
     count = 0
     for row in read_ledger_rows_from_artifacts(roots):
         append_ledger_row(args.output, row)

@@ -19,21 +19,21 @@ from typing import Any
 
 
 def load_context() -> dict[str, Any]:
-    metadata_raw = os.environ.get("PSI_CANDIDATE_METADATA_JSON", "{}")
+    metadata_raw = os.environ.get("CANDIDATE_METADATA_JSON", "{}")
     try:
         metadata = json.loads(metadata_raw)
     except json.JSONDecodeError:
         metadata = {}
     return {
-        "candidate_id": os.environ.get("PSI_CANDIDATE_ID", ""),
-        "lane": os.environ.get("PSI_CANDIDATE_LANE", ""),
-        "target": os.environ.get("PSI_CANDIDATE_TARGET", ""),
+        "candidate_id": os.environ.get("CANDIDATE_ID", ""),
+        "lane": os.environ.get("CANDIDATE_LANE", ""),
+        "target": os.environ.get("CANDIDATE_TARGET", ""),
         "touched_files": [
-            value for value in os.environ.get("PSI_CANDIDATE_TOUCHED_FILES", "").split("|") if value
+            value for value in os.environ.get("CANDIDATE_TOUCHED_FILES", "").split("|") if value
         ],
-        "workspace": os.environ.get("PSI_CANDIDATE_WORKSPACE", ""),
-        "run_dir": os.environ.get("PSI_RUN_DIR", ""),
-        "iteration": os.environ.get("PSI_ITERATION", ""),
+        "workspace": os.environ.get("CANDIDATE_WORKSPACE", ""),
+        "run_dir": os.environ.get("RUN_DIR", ""),
+        "iteration": os.environ.get("ITERATION", ""),
         "hypothesis": metadata.get("hypothesis", ""),
         "expected_effect": metadata.get("expected_effect", ""),
         "semantic_risk": metadata.get("semantic_risk", ""),

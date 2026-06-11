@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import subprocess
 import sys
@@ -13,11 +13,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-import psi_headless_auto_loop as auto_loop  # noqa: E402
-from psi_timing_analysis import replication_verified_from_audits  # noqa: E402
+import headless_auto_loop as auto_loop  # noqa: E402
+from timing_analysis import replication_verified_from_audits  # noqa: E402
 
 
-class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
+class HeadlessAutoLoopRemoteTests(unittest.TestCase):
     def test_global_stop_reasons_contract(self) -> None:
         self.assertEqual(
             auto_loop.STOP_REASONS_GLOBAL,
@@ -34,7 +34,7 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
         )
 
     def test_remote_batch_passes_independent_no_compare_runs(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="psi_auto_loop_remote_") as raw_dir:
+        with tempfile.TemporaryDirectory(prefix="auto_loop_remote_") as raw_dir:
             run_dir = Path(raw_dir)
             (run_dir / "logs").mkdir()
             iteration_dir = run_dir / "iterations" / "iter_001_candidate"
@@ -42,8 +42,8 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
             args = SimpleNamespace(
                 remote_host="devbox",
                 remote_hft_root="/tmp/hftwf_verify_head",
-                remote_batch_script="scripts/psi_headless_remote.sh",
-                remote_run_root="/root/work/psi_experiments/runs",
+                remote_batch_script="scripts/headless_remote.sh",
+                remote_run_root="/root/work/optimization_experiments/runs",
                 remote_run_dir="",
                 remote_candidate_workspace_root="",
                 bash="bash",
@@ -116,7 +116,7 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
             self.assertIn("CANDIDATE_PRIOR_RANGE_MS=120", calls[0])
 
     def test_candidate_replicated_flag_is_not_trusted_without_prior_evidence(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="psi_auto_loop_remote_") as raw_dir:
+        with tempfile.TemporaryDirectory(prefix="auto_loop_remote_") as raw_dir:
             run_dir = Path(raw_dir)
             (run_dir / "logs").mkdir()
             iteration_dir = run_dir / "iterations" / "iter_001_candidate"
@@ -124,8 +124,8 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
             args = SimpleNamespace(
                 remote_host="devbox",
                 remote_hft_root="/tmp/hftwf_verify_head",
-                remote_batch_script="scripts/psi_headless_remote.sh",
-                remote_run_root="/root/work/psi_experiments/runs",
+                remote_batch_script="scripts/headless_remote.sh",
+                remote_run_root="/root/work/optimization_experiments/runs",
                 remote_run_dir="",
                 remote_candidate_workspace_root="",
                 bash="bash",
@@ -177,10 +177,10 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
             self.assertIn("CANDIDATE_REPLICATED=''", calls[0])
 
     def test_local_batch_passes_prior_replication_audit_env(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="psi_auto_loop_local_") as raw_dir:
+        with tempfile.TemporaryDirectory(prefix="auto_loop_local_") as raw_dir:
             run_dir = Path(raw_dir)
             (run_dir / "logs").mkdir()
-            batch_script = run_dir / "psi_headless_remote.sh"
+            batch_script = run_dir / "headless_remote.sh"
             batch_script.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
             args = SimpleNamespace(
                 dry_run=False,
@@ -247,7 +247,7 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
             self.assertEqual(captured_env["CANDIDATE_PRIOR_RANGE_MS"], "120")
 
     def test_replication_env_is_verified_against_current_audit_after_measurement(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="psi_auto_loop_replication_") as raw_dir:
+        with tempfile.TemporaryDirectory(prefix="auto_loop_replication_") as raw_dir:
             run_dir = Path(raw_dir)
             auto_loop.append_tsv_row(
                 run_dir / "attempts.tsv",
@@ -298,7 +298,7 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
             )
 
     def test_synced_candidate_uses_synced_same_source_control(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="psi_auto_loop_remote_") as raw_dir:
+        with tempfile.TemporaryDirectory(prefix="auto_loop_remote_") as raw_dir:
             run_dir = Path(raw_dir)
             (run_dir / "logs").mkdir()
             iteration_dir = run_dir / "iterations" / "iter_001_candidate"
@@ -314,8 +314,8 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
             args = SimpleNamespace(
                 remote_host="devbox",
                 remote_hft_root="/tmp/hftwf_verify_head",
-                remote_batch_script="scripts/psi_headless_remote.sh",
-                remote_run_root="/root/work/psi_experiments/runs",
+                remote_batch_script="scripts/headless_remote.sh",
+                remote_run_root="/root/work/optimization_experiments/runs",
                 remote_run_dir="",
                 remote_candidate_workspace_root="",
                 bash="bash",
@@ -401,7 +401,7 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
         self.assertIn("same-source control", reason)
 
     def test_candidate_replication_uses_cross_run_timing_history(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="psi_auto_loop_remote_") as raw_dir:
+        with tempfile.TemporaryDirectory(prefix="auto_loop_remote_") as raw_dir:
             run_dir = Path(raw_dir) / "fresh_replication_run"
             run_dir.mkdir()
             auto_loop.write_tsv(
@@ -456,7 +456,7 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
             )
 
     def test_candidate_replication_requires_prior_audit_metadata(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="psi_auto_loop_remote_") as raw_dir:
+        with tempfile.TemporaryDirectory(prefix="auto_loop_remote_") as raw_dir:
             run_dir = Path(raw_dir) / "fresh_replication_run"
             run_dir.mkdir()
             history_path = Path(raw_dir) / "prior_timing_history.tsv"
@@ -493,7 +493,7 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
             )
 
     def test_candidate_replication_prior_audit_from_attempts_requires_metadata(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="psi_auto_loop_remote_") as raw_dir:
+        with tempfile.TemporaryDirectory(prefix="auto_loop_remote_") as raw_dir:
             run_dir = Path(raw_dir)
             auto_loop.write_tsv(run_dir / "attempts.tsv", [], auto_loop.ATTEMPTS_FIELDS)
             auto_loop.append_tsv_row(
@@ -523,7 +523,7 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
             )
 
     def test_candidate_replication_ignores_current_run_history(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="psi_auto_loop_remote_") as raw_dir:
+        with tempfile.TemporaryDirectory(prefix="auto_loop_remote_") as raw_dir:
             run_dir = Path(raw_dir) / "current_run"
             run_dir.mkdir()
             history_path = run_dir / "timing_history.tsv"
@@ -605,7 +605,7 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
         self.assertIn("CANDIDATE_RUNNER", reason)
 
     def test_external_patch_command_materializes_without_replication_args(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="psi_auto_loop_patch_") as raw_dir:
+        with tempfile.TemporaryDirectory(prefix="auto_loop_patch_") as raw_dir:
             run_dir = Path(raw_dir)
             source = run_dir / "source"
             source.mkdir()
@@ -647,7 +647,7 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
         self.assertTrue(all("fixed boundary path component: build" in item for item in violations))
 
     def test_iteration_step_records_remote_infra_as_failed_not_rejected(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="psi_auto_loop_infra_") as raw_dir:
+        with tempfile.TemporaryDirectory(prefix="auto_loop_infra_") as raw_dir:
             run_dir = Path(raw_dir)
             (run_dir / "logs").mkdir()
             candidate = {
@@ -661,8 +661,8 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
             }
             args = SimpleNamespace(
                 remote_host="devbox",
-                remote_batch_script="scripts/psi_headless_remote.sh",
-                batch_script=REPO_ROOT / "scripts" / "psi_headless_remote.sh",
+                remote_batch_script="scripts/headless_remote.sh",
+                batch_script=REPO_ROOT / "scripts" / "headless_remote.sh",
                 dry_run=False,
                 candidate_seed_file="",
                 candidate_ledger="",
@@ -729,8 +729,8 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
             }
             args = SimpleNamespace(
                 remote_host="devbox",
-                remote_batch_script="scripts/psi_headless_remote.sh",
-                batch_script=REPO_ROOT / "scripts" / "psi_headless_remote.sh",
+                remote_batch_script="scripts/headless_remote.sh",
+                batch_script=REPO_ROOT / "scripts" / "headless_remote.sh",
                 dry_run=False,
                 candidate_seed_file="",
                 candidate_ledger="",
@@ -870,7 +870,7 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
         produce a non-empty timing_history.tsv with a candidate row carrying the verdict.
         This is the real-world path that was broken (history stayed header-only).
         """
-        with tempfile.TemporaryDirectory(prefix="psi_bridge_e2e_") as raw_dir:
+        with tempfile.TemporaryDirectory(prefix="bridge_e2e_") as raw_dir:
             run_dir = Path(raw_dir)
             candidate = {
                 "candidate_id": "stack_skip_unused_row_fields",

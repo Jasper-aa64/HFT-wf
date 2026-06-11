@@ -1,34 +1,34 @@
 #!/usr/bin/env python3
-"""Patch agent for the Psi headless auto-loop.
+"""Patch agent for the headless auto-loop.
 
 This script is the external --patch-command that the auto-loop invokes to
 generate real source code modifications in a candidate workspace. It bridges
 the harness (which handles build/compare/timing/verdict) with an LLM agent
 (which generates the actual optimization code).
 
-Interface contract (called by psi_headless_auto_loop.py):
-  - Receives candidate context via PSI_* environment variables
-  - Modifies files in PSI_CANDIDATE_WORKSPACE
+Interface contract (called by headless_auto_loop.py):
+  - Receives candidate context via neutral harness environment variables
+  - Modifies files in CANDIDATE_WORKSPACE
   - Exits 0 if changes were made, non-zero otherwise
 
 Environment variables consumed:
-  PSI_CANDIDATE_ID           - unique candidate identifier
-  PSI_CANDIDATE_LANE         - evidence / insight / combination
-  PSI_CANDIDATE_TARGET       - stage or function to optimize
-  PSI_CANDIDATE_TOUCHED_FILES - pipe-separated predicted files
-  PSI_CANDIDATE_METADATA_JSON - full candidate dict as JSON
-  PSI_CANDIDATE_WORKSPACE    - path to the isolated workspace
-  PSI_SOURCE_ROOT            - original source tree (read-only reference)
-  PSI_RUN_DIR                - run root for logs/artifacts
-  PSI_ITERATION              - current iteration number
-  PSI_CANDIDATE_LEDGER       - optional task-level ledger with blocked classes
+  CANDIDATE_ID           - unique candidate identifier
+  CANDIDATE_LANE         - evidence / insight / combination
+  CANDIDATE_TARGET       - stage or function to optimize
+  CANDIDATE_TOUCHED_FILES - pipe-separated predicted files
+  CANDIDATE_METADATA_JSON - full candidate dict as JSON
+  CANDIDATE_WORKSPACE    - path to the isolated workspace
+  SOURCE_ROOT            - original source tree (read-only reference)
+  RUN_DIR                - run root for logs/artifacts
+  ITERATION              - current iteration number
+  CANDIDATE_LEDGER       - optional task-level ledger with blocked classes
 
 Configuration:
-  PSI_PATCH_AGENT_MODE       - "api" (default), "cli", "codex", or "template"
+  PATCH_AGENT_MODE       - "api" (default), "cli", "codex", or "template"
   ANTHROPIC_API_KEY          - required for "api" mode
-  PSI_PATCH_AGENT_MODEL      - model to use (default: claude-sonnet-4-6)
-  PSI_PATCH_AGENT_MAX_TOKENS - max tokens for response (default: 4096)
-  PSI_CODEX_PATCH_TIMEOUT    - max seconds for codex exec mode (default: 900)
+  PATCH_AGENT_MODEL      - model to use (default: claude-sonnet-4-6)
+  PATCH_AGENT_MAX_TOKENS - max tokens for response (default: 4096)
+  CODEX_PATCH_TIMEOUT    - max seconds for codex exec mode (default: 900)
 """
 
 from __future__ import annotations
@@ -44,24 +44,24 @@ from typing import Any
 
 
 def load_candidate_context() -> dict[str, Any]:
-    metadata_json = os.environ.get("PSI_CANDIDATE_METADATA_JSON", "{}")
+    metadata_json = os.environ.get("CANDIDATE_METADATA_JSON", "{}")
     try:
         metadata = json.loads(metadata_json)
     except json.JSONDecodeError:
         metadata = {}
 
     return {
-        "candidate_id": os.environ.get("PSI_CANDIDATE_ID", ""),
-        "lane": os.environ.get("PSI_CANDIDATE_LANE", ""),
-        "target": os.environ.get("PSI_CANDIDATE_TARGET", ""),
+        "candidate_id": os.environ.get("CANDIDATE_ID", ""),
+        "lane": os.environ.get("CANDIDATE_LANE", ""),
+        "target": os.environ.get("CANDIDATE_TARGET", ""),
         "touched_files": [
-            f for f in os.environ.get("PSI_CANDIDATE_TOUCHED_FILES", "").split("|") if f
+            f for f in os.environ.get("CANDIDATE_TOUCHED_FILES", "").split("|") if f
         ],
-        "workspace": os.environ.get("PSI_CANDIDATE_WORKSPACE", ""),
-        "source_root": os.environ.get("PSI_SOURCE_ROOT", ""),
-        "run_dir": os.environ.get("PSI_RUN_DIR", ""),
-        "iteration": os.environ.get("PSI_ITERATION", "0"),
-        "candidate_ledger": os.environ.get("PSI_CANDIDATE_LEDGER", ""),
+        "workspace": os.environ.get("CANDIDATE_WORKSPACE", ""),
+        "source_root": os.environ.get("SOURCE_ROOT", ""),
+        "run_dir": os.environ.get("RUN_DIR", ""),
+        "iteration": os.environ.get("ITERATION", "0"),
+        "candidate_ledger": os.environ.get("CANDIDATE_LEDGER", ""),
         "hypothesis": metadata.get("hypothesis", ""),
         "expected_effect": metadata.get("expected_effect", ""),
         "semantic_risk": metadata.get("semantic_risk", ""),
@@ -193,7 +193,7 @@ def build_optimization_prompt(ctx: dict[str, Any], sources: dict[str, str]) -> s
 - The harness will validate only the final workspace diff, then build, compare, and time it.
 """
 
-    return f"""You are a C++ performance optimization expert working on a high-frequency trading system called Psi.
+    return f"""You are a C++ performance optimization expert working on a high-frequency trading high-frequency trading system.
 
 ## Task
 Generate an optimized version of the target code. The optimization must be:
@@ -274,8 +274,8 @@ def call_anthropic_api(prompt: str) -> str | None:
         print("ERROR: ANTHROPIC_API_KEY not set", file=sys.stderr)
         return None
 
-    model = os.environ.get("PSI_PATCH_AGENT_MODEL", "claude-sonnet-4-6")
-    max_tokens = int(os.environ.get("PSI_PATCH_AGENT_MAX_TOKENS", "4096"))
+    model = os.environ.get("PATCH_AGENT_MODEL", "claude-sonnet-4-6")
+    max_tokens = int(os.environ.get("PATCH_AGENT_MAX_TOKENS", "4096"))
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
@@ -292,7 +292,7 @@ def call_anthropic_api(prompt: str) -> str | None:
 
 def call_claude_cli(prompt: str, workspace: Path) -> str | None:
     """Call claude CLI as a fallback."""
-    prompt_file = workspace / ".psi_patch_prompt.txt"
+    prompt_file = workspace / ".patch_prompt.txt"
     prompt_file.write_text(prompt, encoding="utf-8")
     claude_bin = shutil.which("claude") or shutil.which("claude.cmd") or shutil.which("claude.exe")
     if not claude_bin:
@@ -365,7 +365,7 @@ def call_codex_cli(prompt: str, workspace: Path, run_dir: Path, candidate_id: st
         str(output_path),
         "-",
     ]
-    timeout_seconds = int(os.environ.get("PSI_CODEX_PATCH_TIMEOUT", "900"))
+    timeout_seconds = int(os.environ.get("CODEX_PATCH_TIMEOUT", "900"))
     try:
         completed = subprocess.run(
             command,
@@ -425,7 +425,7 @@ def main() -> int:
 
     print(f"patch_agent: found {len(sources)} source files")
 
-    mode = os.environ.get("PSI_PATCH_AGENT_MODE", "api")
+    mode = os.environ.get("PATCH_AGENT_MODE", "api")
     response: str | None = None
 
     if mode == "codex":
@@ -445,7 +445,7 @@ def main() -> int:
         print("ERROR: template mode not yet implemented", file=sys.stderr)
         return 1
     else:
-        print(f"ERROR: unknown PSI_PATCH_AGENT_MODE={mode}", file=sys.stderr)
+        print(f"ERROR: unknown PATCH_AGENT_MODE={mode}", file=sys.stderr)
         return 1
 
     if not response:

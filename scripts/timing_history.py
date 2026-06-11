@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared timing-history helpers for Psi workflow scripts."""
+"""Shared timing-history helpers for workflow scripts."""
 
 from __future__ import annotations
 
@@ -127,7 +127,7 @@ def repo_root() -> Path:
 
 
 def default_host_key() -> str:
-    for env_name in ("PSI_TIMING_HOST_KEY", "PSI_HOST_KEY", "HOST_KEY"):
+    for env_name in ("TIMING_HOST_KEY", "HARNESS_HOST_KEY", "HOST_KEY"):
         value = os.environ.get(env_name, "").strip()
         if value:
             return value

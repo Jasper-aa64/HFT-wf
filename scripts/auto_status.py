@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Print the observable status surface for a Psi contract-v1 run."""
+"""Print the observable status surface for a contract-v1 run."""
 
 from __future__ import annotations
 
@@ -119,7 +119,7 @@ def latest_queue_state(rows: list[dict[str, str]]) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Show Psi automatic optimization run status.")
+    parser = argparse.ArgumentParser(description="Show automatic optimization run status.")
     parser.add_argument("--run-dir", type=Path, required=True)
     return parser
 
@@ -137,7 +137,7 @@ def main() -> int:
     retry_conditions = read_tsv(run_dir / "retry_conditions.tsv")
     counts = count_verdicts(attempts)
 
-    # Auto-loop lane counts (if run was driven by psi_headless_auto_loop)
+    # Auto-loop lane counts (if run was driven by headless_auto_loop)
     lane_counts = state.get("lane_counts") if isinstance(state.get("lane_counts"), dict) else {}
     control_distribution = state.get("control_distribution") if isinstance(state.get("control_distribution"), dict) else {}
     patch_entries = patch_manifest.get("entries") if isinstance(patch_manifest, dict) else []

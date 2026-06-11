@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Patch queue helpers for the Psi headless auto-loop.
+"""Patch queue helpers for the headless auto-loop.
 
 This module owns the filesystem surface for candidate patches. It does two
 things:
@@ -13,7 +13,7 @@ things:
    remote job needs to).
 
 The helpers here do not apply patches on disk. Remote apply/revert is done by
-``psi_headless_remote.sh``. The auto-loop uses this module to record intent and
+``headless_remote.sh``. The auto-loop uses this module to record intent and
 status so the run root is the single machine-readable surface.
 """
 
@@ -47,7 +47,7 @@ def manifest_path(run_dir: Path) -> Path:
 def load_manifest(run_dir: Path) -> dict[str, Any]:
     path = manifest_path(run_dir)
     if not path.exists():
-        return {"schema": "psi_patch_manifest_v1", "entries": []}
+        return {"schema": "patch_manifest_v1", "entries": []}
     data = json.loads(path.read_text(encoding="utf-8-sig"))
     if "entries" not in data:
         data["entries"] = []

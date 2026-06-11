@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Bounded long-run controller for Psi headless optimization batches.
+"""Bounded long-run controller for headless optimization batches.
 
-This script is the control layer around ``psi_headless_remote.sh``. It keeps the
+This script is the control layer around ``headless_remote.sh``. It keeps the
 single-batch evidence contract intact, then publishes a durable long-run status
 surface at the run root after each batch.
 """
@@ -19,8 +19,8 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from psi_report_paths import reserve_report_paths
-from psi_timing_history import HISTORY_FIELDNAMES, read_history_rows, upsert_history_rows
+from report_paths import reserve_report_paths
+from timing_history import HISTORY_FIELDNAMES, read_history_rows, upsert_history_rows
 
 
 STOP_REASONS = {
@@ -377,10 +377,10 @@ def write_longrun_state(
 
 def write_batch_report(run_dir: Path, rows: list[dict[str, Any]]) -> Path:
     report_date = date.today().isoformat()
-    report_stem = f"{report_date} Psi Headless Long-Run Report"
+    report_stem = f"{report_date} Headless Long-Run Report"
     path, _ = reserve_report_paths(run_dir / "reports", report_date, report_stem)
     lines = [
-        "# Psi Headless Long-Run Report",
+        "# Headless Long-Run Report",
         "",
         f"- run_dir: `{run_dir}`",
         f"- updated_at: `{utc_now()}`",
@@ -413,7 +413,7 @@ def run_batch(args: argparse.Namespace, run_dir: Path, batch_index: int) -> tupl
             "RUN_DIR": str(batch_dir),
             "HEADLESS_CONTROL_DIR": str(batch_dir),
             "GENERATE_REPORT": "1" if args.generate_report else env.get("GENERATE_REPORT", "0"),
-            "REPORT_SCRIPT": str((repo_root() / "scripts" / "psi_daily_report.py").resolve()),
+            "REPORT_SCRIPT": str((repo_root() / "scripts" / "daily_report.py").resolve()),
             "REPORT_ROOT": str(batch_dir / "reports"),
             "MEASURE_RUNS": str(args.measure_runs),
         }
@@ -444,9 +444,9 @@ def resolve_stop_file(run_dir: Path, stop_file: str | None) -> Path:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run bounded Psi headless batches with a durable long-run status surface.")
+    parser = argparse.ArgumentParser(description="Run bounded headless batches with a durable long-run status surface.")
     parser.add_argument("--run-dir", type=Path, required=True)
-    parser.add_argument("--batch-script", type=Path, default=repo_root() / "scripts" / "psi_headless_remote.sh")
+    parser.add_argument("--batch-script", type=Path, default=repo_root() / "scripts" / "headless_remote.sh")
     parser.add_argument("--bash", default="bash")
     parser.add_argument("--max-batches", type=int, default=3)
     parser.add_argument("--max-hours", type=float, default=8.0)

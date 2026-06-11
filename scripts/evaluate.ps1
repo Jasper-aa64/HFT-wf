@@ -261,9 +261,9 @@ if (!(Test-Path $Repo)) {
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $HftRoot = Split-Path -Parent $ScriptDir
-$EvidenceRoot = Join-Path $HftRoot "experiments\psi-evaluator-runs"
-$ResultsFile = Join-Path $HftRoot "experiments\psi_results.tsv"
-$WelchHelper = Join-Path $ScriptDir "psi_welch_test.py"
+$EvidenceRoot = Join-Path $HftRoot "experiments\evaluator-runs"
+$ResultsFile = Join-Path $HftRoot "experiments\results.tsv"
+$WelchHelper = Join-Path $ScriptDir "welch_test.py"
 $RunId = Get-Date -Format "yyyyMMdd-HHmmss"
 $EvidenceDir = Join-Path $EvidenceRoot $RunId
 New-Item -ItemType Directory -Force -Path $EvidenceDir | Out-Null
@@ -332,9 +332,9 @@ if ($WithBuild) {
     }
 }
 
-$runLogDir = Join-Path $Repo "timing_logs\psi_evaluate"
+$runLogDir = Join-Path $Repo "timing_logs\evaluate"
 New-Item -ItemType Directory -Force -Path $runLogDir | Out-Null
-$compareLogDir = Join-Path $Repo "compare_logs\psi_evaluate"
+$compareLogDir = Join-Path $Repo "compare_logs\evaluate"
 New-Item -ItemType Directory -Force -Path $compareLogDir | Out-Null
 
 Write-Host ""
@@ -558,7 +558,7 @@ if ($WithCompare -and !$correctnessPass) {
 }
 
 $evidenceLines = @()
-$evidenceLines += "# Psi Evaluator Run $RunId"
+$evidenceLines += "# Evaluator Run $RunId"
 $evidenceLines += ""
 $evidenceLines += "## Command"
 $evidenceLines += ""

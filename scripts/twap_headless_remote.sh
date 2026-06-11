@@ -3,7 +3,7 @@ set -u
 
 # TWAP-specific remote runner for the optimization harness.
 #
-# This script intentionally does not reuse the Psi parquet compare path. It
+# This script intentionally does not reuse the parquet compare path. It
 # validates TWAP correctness with TWAP runtime tools and measures push latency
 # with twap_position_push_perf_test.
 
@@ -20,12 +20,12 @@ RUNTIME_DIR="${RUNTIME_DIR:-/tmp/code2-twap-runtime}"
 MEASURE_CASES="${MEASURE_CASES:-100:50:120 500:20:180 1000:20:240 500:5:240}"
 SUBSCRIBER_COUNTS="${SUBSCRIBER_COUNTS:-1}"
 BUILD_TARGETS="${BUILD_TARGETS:-PsiGrpcServer PsiTraderRunner twap_current_task_runtime_test twap_position_push_perf_test}"
-CANDIDATE_ID="${CANDIDATE_ID:-${PSI_CANDIDATE_ID:-manual_twap_candidate}}"
+CANDIDATE_ID="${CANDIDATE_ID:-manual_twap_candidate}"
 TWAP_CORRECTNESS_MODE="${TWAP_CORRECTNESS_MODE:-push_only}"
 TWAP_ACCOUNT_DESC_CHECK="${TWAP_ACCOUNT_DESC_CHECK:-required}"
 MIN_NORMAL_P95_IMPROVEMENT_MS="${MIN_NORMAL_P95_IMPROVEMENT_MS:-1.0}"
 MAX_STRESS_P95_REGRESSION_MS="${MAX_STRESS_P95_REGRESSION_MS:-5.0}"
-# control_source_kind mirrors the psi harness field so the shared judge_verdict
+# control_source_kind mirrors the default harness field so the shared judge_verdict
 # gate (synced_workspace + accepted -> requires synced_same_source) works for TWAP.
 # The value is derived at script-top but finalised after main() resolves CONTROL_ROOT.
 CONTROL_SOURCE_KIND="${CONTROL_SOURCE_KIND:-}"

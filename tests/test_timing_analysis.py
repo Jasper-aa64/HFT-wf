@@ -9,11 +9,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from psi_attempts_schema import ATTEMPTS_FIELDNAMES  # noqa: E402
-from psi_headless_auto_loop import apply_change_class_policy, judge_verdict  # noqa: E402
-from psi_timing_analysis import (  # noqa: E402
+from attempts_schema import ATTEMPTS_FIELDNAMES  # noqa: E402
+from headless_auto_loop import apply_change_class_policy, judge_verdict  # noqa: E402
+from timing_analysis import (  # noqa: E402
     ConfidenceTierResult,
-    PsiTimingAdapter,
+    TimingAdapter,
     TwapAdapter,
     confidence_tier,
     evidence_fields,
@@ -641,8 +641,8 @@ class ConfidenceTierIntegrationTests(unittest.TestCase):
         )
 
 
-class PsiScorecardCharacterizationTests(unittest.TestCase):
-    """Golden tests for the current Psi verdict surface before Scorecard refactor."""
+class TimingScorecardCharacterizationTests(unittest.TestCase):
+    """Golden tests for the current timing verdict surface before Scorecard refactor."""
 
     def assertVerdictAndTier(
         self,
@@ -725,7 +725,7 @@ class PsiScorecardCharacterizationTests(unittest.TestCase):
         )
 
 
-class PsiScorecardStructureTests(unittest.TestCase):
+class TimingScorecardStructureTests(unittest.TestCase):
     def test_psi_adapter_fills_domain_blind_scorecard(self) -> None:
         tier = ConfidenceTierResult(
             tier="decisive",
@@ -735,7 +735,7 @@ class PsiScorecardStructureTests(unittest.TestCase):
             sign_consistency=1.0,
         )
 
-        scorecard = PsiTimingAdapter.scorecard(
+        scorecard = TimingAdapter.scorecard(
             deltas_ms=[1500.0, 1600.0, 1700.0, 1800.0, 1900.0],
             required_pairs=5,
             control_median_ms=50000.0,
@@ -752,7 +752,7 @@ class PsiScorecardStructureTests(unittest.TestCase):
             change_class="class_b",
         )
 
-        self.assertEqual(scorecard.scenario_id, "psi_paired_timing")
+        self.assertEqual(scorecard.scenario_id, "paired_timing")
         self.assertTrue(scorecard.correctness_pass)
         self.assertEqual(scorecard.primary.name, "paired_median_delta_ms")
         self.assertEqual(scorecard.primary.samples_ms, [1500.0, 1600.0, 1700.0, 1800.0, 1900.0])

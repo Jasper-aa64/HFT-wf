@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Paired timing analysis helpers for Psi headless optimization runs."""
+"""Paired timing analysis helpers for headless optimization runs."""
 
 from __future__ import annotations
 
@@ -624,8 +624,8 @@ class TwapAdapter:
         )
 
 
-class PsiTimingAdapter:
-    """Translate Psi paired timing evidence into the domain-blind scorecard."""
+class TimingAdapter:
+    """Translate paired timing evidence into the domain-blind scorecard."""
 
     @staticmethod
     def scorecard(
@@ -644,7 +644,7 @@ class PsiTimingAdapter:
         build_pass: bool,
         compare_pass: bool,
         change_class: str,
-        scenario_id: str = "psi_paired_timing",
+        scenario_id: str = "paired_timing",
     ) -> Scorecard:
         if not build_pass:
             correctness_pass = False
@@ -895,7 +895,7 @@ def summarize_paired_timing(
         sign_min=sign_min,
     )
 
-    scorecard = PsiTimingAdapter.scorecard(
+    scorecard = TimingAdapter.scorecard(
         deltas_ms=deltas_ms,
         required_pairs=required_pairs,
         control_median_ms=control_median_ms,

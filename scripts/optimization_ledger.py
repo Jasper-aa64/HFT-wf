@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-from psi_attempts_schema import OPTIMIZATION_LEDGER_FIELDNAMES
+from attempts_schema import OPTIMIZATION_LEDGER_FIELDNAMES
 
 
 LEDGER_FILENAME = "optimization_ledger.tsv"

@@ -15,7 +15,7 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-import psi_headless_auto_loop as auto_loop  # noqa: E402
+import headless_auto_loop as auto_loop  # noqa: E402
 
 DRIVER_PATH = REPO_ROOT / "scripts" / "run_prepared_candidate.py"
 SMOKE_DRIVER_PATH = DRIVER_PATH.with_name("run_prepared_replication_smoke.py")

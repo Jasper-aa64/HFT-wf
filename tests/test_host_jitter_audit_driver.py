@@ -14,7 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-import psi_host_jitter_audit as audit  # noqa: E402
+import host_jitter_audit as audit  # noqa: E402
 
 
 TIMING_FIELDS = [
@@ -37,9 +37,9 @@ def write_timing(path: Path, rows: list[dict[str, str]]) -> None:
         writer.writerows(rows)
 
 
-class PsiHostJitterAuditTests(unittest.TestCase):
+class HostJitterAuditTests(unittest.TestCase):
     def test_extracts_control_samples_from_no_compare_rows(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="psi_jitter_parse_") as raw_dir:
+        with tempfile.TemporaryDirectory(prefix="jitter_parse_") as raw_dir:
             run_dir = Path(raw_dir)
             write_timing(
                 run_dir / "timing_samples.tsv",
@@ -55,7 +55,7 @@ class PsiHostJitterAuditTests(unittest.TestCase):
             self.assertEqual(audit.extract_control_samples(run_dir), [1000.0, 1010.0])
 
     def test_extracts_paired_deltas_by_pair_index(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="psi_jitter_pair_") as raw_dir:
+        with tempfile.TemporaryDirectory(prefix="jitter_pair_") as raw_dir:
             run_dir = Path(raw_dir)
             write_timing(
                 run_dir / "timing_samples.tsv",
@@ -71,7 +71,7 @@ class PsiHostJitterAuditTests(unittest.TestCase):
             self.assertEqual(audit.extract_paired_deltas(run_dir), [50.0, -100.0])
 
     def test_busy_preflight_blocks_without_remote_batch(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="psi_jitter_busy_") as raw_dir:
+        with tempfile.TemporaryDirectory(prefix="jitter_busy_") as raw_dir:
             run_dir = Path(raw_dir)
             args = SimpleNamespace(
                 run_dir=run_dir,
@@ -114,12 +114,12 @@ class PsiHostJitterAuditTests(unittest.TestCase):
             self.assertEqual(summary["promotion_gate"], "blocked_by_preflight_runner")
             self.assertEqual(summary["weather_decision"], "NOISY")
             self.assertEqual(summary["control_sample_count"], 0)
-            self.assertTrue((run_dir / "psi_host_jitter_audit_summary.json").exists())
-            saved = json.loads((run_dir / "psi_host_jitter_audit_summary.json").read_text(encoding="utf-8"))
+            self.assertTrue((run_dir / "host_jitter_audit_summary.json").exists())
+            saved = json.loads((run_dir / "host_jitter_audit_summary.json").read_text(encoding="utf-8"))
             self.assertEqual(saved["promotion_gate"], "blocked_by_preflight_runner")
 
     def test_busy_preflight_forces_noisy_when_snapshot_probe_fails(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="psi_jitter_probe_fail_") as raw_dir:
+        with tempfile.TemporaryDirectory(prefix="jitter_probe_fail_") as raw_dir:
             run_dir = Path(raw_dir)
             args = SimpleNamespace(
                 run_dir=run_dir,

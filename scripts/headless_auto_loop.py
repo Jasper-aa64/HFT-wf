@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Closed-loop Psi headless auto-loop controller.
+"""Closed-loop headless auto-loop controller.
 
-This script wraps the existing single-batch ``psi_headless_remote.sh`` executor
+This script wraps the existing single-batch ``headless_remote.sh`` executor
 with a true closed-loop candidate generator. Each iteration:
 
 1. Refreshes the control distribution from ``timing_history.tsv`` (current host
@@ -9,7 +9,7 @@ with a true closed-loop candidate generator. Each iteration:
    exist.
 2. Calls the three-lane candidate generator (evidence / insight / combination).
 3. Selects the next candidate by lane priority and cooldown state.
-4. Registers the candidate patch body through ``psi_patch_queue``.
+4. Registers the candidate patch body through ``patch_queue``.
 5. Invokes the remote batch script with the candidate id so the remote side
    applies the patch, builds, compares, and times.
 6. Records the resulting attempt row, neutral pool membership, retry condition
@@ -54,14 +54,14 @@ from typing import Any
 
 # Local modules - both live under HFT-wf/scripts/.
 from optimization_ledger import LEDGER_FILENAME, append_ledger_row, build_ledger_row
-from psi_candidate_generator import generate_candidates
-from psi_patch_queue import (
+from candidate_generator import generate_candidates
+from patch_queue import (
     register_candidate as register_patch,
     set_status as set_patch_status,
     snapshot_worktree,
 )
-from psi_timing_analysis import TwapAdapter, sample_escalation_decision, validate_class_a
-from psi_timing_history import (
+from timing_analysis import TwapAdapter, sample_escalation_decision, validate_class_a
+from timing_history import (
     HISTORY_FIELDNAMES,
     default_host_key,
     read_history_rows,
@@ -194,7 +194,7 @@ def _merge_comparison_summary(batch_state: dict[str, Any], summary: dict[str, An
         batch_state["twap_timing_samples"] = summary["timing_samples"]
     # Bridge paired_samples list → control_samples_ms / candidate_samples_ms so
     # upsert_timing_from_batch does not early-return on empty sample lists.
-    # paired_samples is emitted by psi_headless_remote.sh when interleaved A/B
+    # paired_samples is emitted by headless_remote.sh when interleaved A/B
     # pairs were collected; each entry has pair_index, control_ms, candidate_ms.
     # Sort by pair_index first (defensive: remote output is ordered but not guaranteed).
     # Only collect entries that carry both keys so the two lists stay equal-length.
@@ -970,7 +970,7 @@ def _sync_candidate_workspace_to_remote(
         return "", f"candidate workspace does not exist: {workspace}"
 
     remote_ws = _remote_candidate_workspace(args, run_dir, candidate)
-    with tempfile.TemporaryDirectory(prefix="psi_candidate_sync_") as tmp:
+    with tempfile.TemporaryDirectory(prefix="candidate_sync_") as tmp:
         archive_base = Path(tmp) / candidate["candidate_id"]
         archive_path = Path(shutil.make_archive(str(archive_base), "gztar", root_dir=workspace))
         remote_archive = f"/tmp/{archive_path.name}"
@@ -1023,7 +1023,7 @@ def _sync_control_workspace_to_remote(
         return "", reason
 
     remote_ws = _remote_control_workspace(args, run_dir, candidate)
-    with tempfile.TemporaryDirectory(prefix="psi_control_sync_") as tmp:
+    with tempfile.TemporaryDirectory(prefix="control_sync_") as tmp:
         archive_base = Path(tmp) / f"{candidate['candidate_id']}_control"
         archive_path = Path(shutil.make_archive(str(archive_base), "gztar", root_dir=control_workspace))
         remote_archive = f"/tmp/{archive_path.name}"
@@ -1084,7 +1084,7 @@ def _prepare_workspace(source_root: Path, workspace: Path, *, refresh: bool) -> 
     if init.returncode != 0:
         return False, f"candidate workspace git init failed: {init.stderr.strip()}"
     subprocess.run(
-        ["git", "config", "user.email", "psi-auto-loop@example.invalid"],
+        ["git", "config", "user.email", "auto-loop@example.invalid"],
         cwd=str(workspace),
         check=False,
         stdout=subprocess.PIPE,
@@ -1092,7 +1092,7 @@ def _prepare_workspace(source_root: Path, workspace: Path, *, refresh: bool) -> 
         text=True,
     )
     subprocess.run(
-        ["git", "config", "user.name", "Psi Auto Loop"],
+        ["git", "config", "user.name", "Auto Loop"],
         cwd=str(workspace),
         check=False,
         stdout=subprocess.PIPE,
@@ -1102,7 +1102,7 @@ def _prepare_workspace(source_root: Path, workspace: Path, *, refresh: bool) -> 
     add = _git(workspace, ["add", "-A"])
     if add.returncode != 0:
         return False, f"candidate workspace git add failed: {add.stderr.strip()}"
-    commit = _git(workspace, ["commit", "-m", "psi candidate workspace base"])
+    commit = _git(workspace, ["commit", "-m", "candidate workspace base"])
     if commit.returncode != 0:
         return False, f"candidate workspace git commit failed: {commit.stderr.strip()}"
     return True, ""
@@ -1112,11 +1112,11 @@ def _run_builtin_patch_command(command: str, workspace: Path, candidate: dict[st
     if command in {"builtin:noop", "noop"}:
         return 0, "builtin noop produced no workspace changes"
     if command in {"builtin:fake-nonempty", "fake-nonempty"}:
-        touched = candidate.get("touched_files") or ["psi_candidate_patch_probe.txt"]
+        touched = candidate.get("touched_files") or ["candidate_patch_probe.txt"]
         target = workspace / str(touched[0])
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("a", encoding="utf-8") as handle:
-            handle.write(f"\n// psi-auto-loop materialized {candidate['candidate_id']}\n")
+            handle.write(f"\n// auto-loop materialized {candidate['candidate_id']}\n")
         return 0, f"builtin fake-nonempty touched {target.relative_to(workspace)}"
     return 127, f"unknown builtin patch command: {command}"
 
@@ -1133,16 +1133,16 @@ def _run_external_patch_command(
     env = os.environ.copy()
     env.update(
         {
-            "PSI_CANDIDATE_ID": candidate["candidate_id"],
-            "PSI_CANDIDATE_LANE": candidate["lane"],
-            "PSI_CANDIDATE_TARGET": candidate["target"],
-            "PSI_CANDIDATE_TOUCHED_FILES": "|".join(candidate.get("touched_files", [])),
-            "PSI_CANDIDATE_METADATA_JSON": json.dumps(candidate, ensure_ascii=False),
-            "PSI_CANDIDATE_WORKSPACE": str(workspace),
-            "PSI_SOURCE_ROOT": str(source_root),
-            "PSI_RUN_DIR": str(run_dir),
-            "PSI_ITERATION": str(iteration),
-            "PSI_CANDIDATE_LEDGER": candidate_ledger,
+            "CANDIDATE_ID": candidate["candidate_id"],
+            "CANDIDATE_LANE": candidate["lane"],
+            "CANDIDATE_TARGET": candidate["target"],
+            "CANDIDATE_TOUCHED_FILES": "|".join(candidate.get("touched_files", [])),
+            "CANDIDATE_METADATA_JSON": json.dumps(candidate, ensure_ascii=False),
+            "CANDIDATE_WORKSPACE": str(workspace),
+            "SOURCE_ROOT": str(source_root),
+            "RUN_DIR": str(run_dir),
+            "ITERATION": str(iteration),
+            "CANDIDATE_LEDGER": candidate_ledger,
         }
     )
     completed = subprocess.run(
@@ -1208,7 +1208,7 @@ def materialize_candidate_patch(
     if not ok:
         return fail(reason)
 
-    command = args.patch_command or os.environ.get("PSI_PATCH_COMMAND", "builtin:noop")
+    command = args.patch_command or os.environ.get("PATCH_COMMAND", "builtin:noop")
     metadata["patch_command"] = command
     if command.startswith("builtin:") or command in {"noop", "fake-nonempty"}:
         rc, output = _run_builtin_patch_command(command, workspace, candidate)
@@ -1290,7 +1290,7 @@ def call_remote_batch(
     candidate: dict[str, Any],
     iteration: int,
 ) -> tuple[int, Path, dict[str, Any]]:
-    """Invoke ``psi_headless_remote.sh`` for one candidate.
+    """Invoke ``headless_remote.sh`` for one candidate.
 
     In dry-run mode, this simulates the remote pipeline by writing synthetic
     evidence into an iteration subdirectory. Otherwise it shells out with
@@ -2004,7 +2004,7 @@ def upsert_timing_from_batch(
                     "run_id": run_dir.name,
                     "source_attempts_path": str(run_dir / "attempts.tsv"),
                     "host_key": host_key,
-                    "control_head": os.environ.get("PSI_CONTROL_HEAD", "auto_loop"),
+                    "control_head": os.environ.get("CONTROL_HEAD", "auto_loop"),
                     "active_gate": "twap headless remote",
                     "compatibility_group": "twap_position_push",
                     "compatibility_tag": case,
@@ -2099,7 +2099,7 @@ def upsert_timing_from_batch(
                 "run_id": run_dir.name,
                 "source_attempts_path": str(run_dir / "attempts.tsv"),
                 "host_key": host_key,
-                "control_head": os.environ.get("PSI_CONTROL_HEAD", "auto_loop"),
+                "control_head": os.environ.get("CONTROL_HEAD", "auto_loop"),
                 "active_gate": "headless auto-loop",
                 "compatibility_group": "",
                 "compatibility_tag": "",
@@ -2129,7 +2129,7 @@ def upsert_timing_from_batch(
                 "delta_seconds": "",
                 "timing_verdict": verdict if kind == "candidate" else "",
                 "timing_verdict_reason": verdict_reason if kind == "candidate" else "",
-                "timing_verdict_method": "auto_loop_dry_run" if batch_state.get("dry_run") else "psi_headless_remote",
+                "timing_verdict_method": "auto_loop_dry_run" if batch_state.get("dry_run") else "headless_remote",
                 "control_sample_count": str(len(control_samples)),
                 "candidate_sample_count": str(len(candidate_samples)),
                 "paired_sample_count": str(min(len(control_samples), len(candidate_samples))),
@@ -2324,7 +2324,7 @@ def is_twap_run(args: argparse.Namespace) -> bool:
 def seed_twap_profile_if_missing(args: argparse.Namespace, run_dir: Path) -> None:
     """Create TWAP profile/hotspot context for adapter runs.
 
-    TWAP cannot use the Psi synthetic profile. When the run has no profile yet,
+    TWAP cannot use the synthetic profile. When the run has no profile yet,
     call the TWAP source scanner so the candidate generator receives real
     source-root/touched-file context rather than hand-authored seed candidates.
     """
@@ -2623,14 +2623,14 @@ def iteration_step(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run the Psi headless auto-loop (closed-loop optimization).")
+    parser = argparse.ArgumentParser(description="Run the headless auto-loop (closed-loop optimization).")
     parser.add_argument("--run-dir", type=Path, required=True)
-    parser.add_argument("--batch-script", type=Path, default=repo_root() / "scripts" / "psi_headless_remote.sh")
+    parser.add_argument("--batch-script", type=Path, default=repo_root() / "scripts" / "headless_remote.sh")
     parser.add_argument("--bash", default="bash")
     parser.add_argument("--remote-host", default="", help="SSH host for remote build/compare/timing. Patch generation still runs locally.")
     parser.add_argument("--remote-hft-root", default="/root/work/HFT-wf", help="Remote HFT-wf root containing the batch script.")
-    parser.add_argument("--remote-batch-script", default="scripts/psi_headless_remote.sh", help="Batch script path on the remote host, relative to --remote-hft-root unless absolute.")
-    parser.add_argument("--remote-run-root", default="/root/work/psi_experiments/runs", help="Remote parent directory for per-run artifacts.")
+    parser.add_argument("--remote-batch-script", default="scripts/headless_remote.sh", help="Batch script path on the remote host, relative to --remote-hft-root unless absolute.")
+    parser.add_argument("--remote-run-root", default="/root/work/optimization_experiments/runs", help="Remote parent directory for per-run artifacts.")
     parser.add_argument("--remote-run-dir", default="", help="Exact remote run root override. Defaults to <remote-run-root>/<local-run-dir-name>.")
     parser.add_argument("--remote-candidate-workspace-root", default="", help="Remote parent directory for synced local candidate workspaces.")
     parser.add_argument("--max-iterations", type=int, default=6)
@@ -2665,14 +2665,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir")
     parser.add_argument("--stop-file", help="Stop before the next iteration when this file exists. Defaults to <run-dir>/STOP.")
     parser.add_argument("--dry-run", action="store_true", help="Skip SSH / bash and generate synthetic per-iteration evidence.")
-    parser.add_argument("--patch-command", default="", help="External command to generate candidate patch in workspace. Receives PSI_* env vars. Use 'builtin:noop' or 'builtin:fake-nonempty' for testing.")
-    parser.add_argument("--source-root", default="", help="Root of the Psi source tree to copy into candidate workspaces.")
+    parser.add_argument("--patch-command", default="", help="External command to generate candidate patch in workspace. Receives neutral harness env vars. Use 'builtin:noop' or 'builtin:fake-nonempty' for testing.")
+    parser.add_argument("--source-root", default="", help="Root of the source tree to copy into candidate workspaces.")
     parser.add_argument("--candidate-workspace", default="", help="Override candidate workspace base path (default: <run-dir>/candidate_workspaces/<id>).")
     parser.add_argument("--reuse-candidate-workspace", action="store_true", help="Skip workspace refresh if it already exists.")
-    parser.add_argument("--candidate-ledger", default="", help="Optional JSON ledger of blocked, retry-only, and non-retry Psi candidates/classes.")
-    parser.add_argument("--candidate-seed-file", default="", help="Optional JSON file containing explicit candidate lanes for non-Psi adapters such as TWAP.")
+    parser.add_argument("--candidate-ledger", default="", help="Optional JSON ledger of blocked, retry-only, and non-retry candidates/classes.")
+    parser.add_argument("--candidate-seed-file", default="", help="Optional JSON file containing explicit candidate lanes for non-default adapters such as TWAP.")
     parser.add_argument("--replication-history", default="", help="Optional timing_history.tsv from a prior independent run used to verify replicated evidence.")
-    parser.add_argument("--control-root", default="", help="Optional control source root for non-Psi batch scripts such as TWAP.")
+    parser.add_argument("--control-root", default="", help="Optional control source root for non-default batch scripts such as TWAP.")
     parser.add_argument("--twap-endpoint", default="", help="TWAP gRPC endpoint passed to twap_headless_remote.sh.")
     parser.add_argument("--twap-user-id", default="", help="TWAP userId passed to twap_headless_remote.sh.")
     parser.add_argument("--twap-measure-cases", default="", help="TWAP timing cases, e.g. '100:50:120 500:20:180'.")

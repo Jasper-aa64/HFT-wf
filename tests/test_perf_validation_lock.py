@@ -118,19 +118,19 @@ class PerfValidationLockLocalTests(unittest.TestCase):
         result = lock_mod.acquire_lock(
             self.lock_path,
             run_id="test_meta",
-            script_name="psi_headless_remote.sh",
+            script_name="headless_remote.sh",
             candidate_id="stack_skip_unused_row_fields",
-            owner_command="bash scripts/psi_headless_remote.sh",
+            owner_command="bash scripts/headless_remote.sh",
         )
         self.assertTrue(result["acquired"])
         data = result["lock_data"]
         self.assertEqual(data["run_id"], "test_meta")
-        self.assertEqual(data["script_name"], "psi_headless_remote.sh")
+        self.assertEqual(data["script_name"], "headless_remote.sh")
         self.assertEqual(data["candidate_id"], "stack_skip_unused_row_fields")
         self.assertIn("timestamp", data)
         self.assertIn("pid", data)
         self.assertIn("hostname", data)
-        self.assertEqual(data["owner_command"], "bash scripts/psi_headless_remote.sh")
+        self.assertEqual(data["owner_command"], "bash scripts/headless_remote.sh")
 
     # -- stale lock recovery --
 
@@ -157,7 +157,7 @@ class PerfValidationLockLocalTests(unittest.TestCase):
             result = lock_mod.acquire_lock(
                 self.lock_path,
                 run_id="new_run",
-                script_name="psi_headless_remote.sh",
+                script_name="headless_remote.sh",
             )
         self.assertTrue(result["acquired"])
         self.assertEqual(result["lock_data"]["run_id"], "new_run")
@@ -181,7 +181,7 @@ class PerfValidationLockLocalTests(unittest.TestCase):
             result = lock_mod.acquire_lock(
                 self.lock_path,
                 run_id="new_run",
-                script_name="psi_headless_remote.sh",
+                script_name="headless_remote.sh",
             )
 
         self.assertFalse(result["acquired"])

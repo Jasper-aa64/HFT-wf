@@ -1,11 +1,11 @@
-"""Unified attempts.tsv schema for the Psi optimization harness.
+"""Unified attempts.tsv schema for the optimization harness.
 
-Three writers (``psi_auto_optimize.py``, ``psi_control_loop.py``, and the
-inline python heredoc in ``psi_headless_remote.sh``) historically carried
+Three writers (``auto_optimize.py``, ``control_loop.py``, and the
+inline python heredoc in ``headless_remote.sh``) historically carried
 their own field lists. This module exposes a single ``ATTEMPTS_FIELDNAMES``
 list so every writer emits the same header.
 
-The union is ordered by ``psi_auto_optimize.py`` first, then fields that
+The union is ordered by ``auto_optimize.py`` first, then fields that
 only appear in the other two writers are appended in first-seen order.
 ``csv.DictWriter`` writes empty strings for missing keys, which is the
 expected behavior for writers that do not populate every column.
@@ -15,7 +15,7 @@ from __future__ import annotations
 
 
 ATTEMPTS_FIELDNAMES: list[str] = [
-    # psi_auto_optimize.py order
+    # auto_optimize.py order
     "rank",
     "kind",
     "policy_bucket",
@@ -82,7 +82,7 @@ ATTEMPTS_FIELDNAMES: list[str] = [
     "promotion_sample_floor",
     "bundle_audit_sample_floor",
     "notes",
-    # Fields only present in psi_control_loop.py / psi_headless_remote.sh,
+    # Fields only present in control_loop.py / headless_remote.sh,
     # in first-seen order.
     "stage",
     "observed_cost_ms",

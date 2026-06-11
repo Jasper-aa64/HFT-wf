@@ -11,14 +11,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-import psi_headless_auto_loop as auto_loop  # noqa: E402
+import headless_auto_loop as auto_loop  # noqa: E402
 from optimization_ledger import (  # noqa: E402
     LEDGER_FILENAME,
     build_ledger_row,
     constants_hash,
     read_ledger_rows_from_artifacts,
 )
-from psi_attempts_schema import ATTEMPTS_FIELDNAMES, OPTIMIZATION_LEDGER_FIELDNAMES  # noqa: E402
+from attempts_schema import ATTEMPTS_FIELDNAMES, OPTIMIZATION_LEDGER_FIELDNAMES  # noqa: E402
 
 
 class OptimizationLedgerTests(unittest.TestCase):

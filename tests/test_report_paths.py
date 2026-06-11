@@ -11,64 +11,64 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from psi_auto_optimize import parse_report_paths  # noqa: E402
-from psi_headless_longrun import sync_latest_artifacts  # noqa: E402
-from psi_report_paths import reserve_report_paths, safe_report_text  # noqa: E402
+from auto_optimize import parse_report_paths  # noqa: E402
+from headless_longrun import sync_latest_artifacts  # noqa: E402
+from report_paths import reserve_report_paths, safe_report_text  # noqa: E402
 
 
 class ReportPathTests(unittest.TestCase):
     def test_reserve_report_paths_uses_suffix_when_markdown_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             report_root = Path(tmp)
-            first_md, first_pdf = reserve_report_paths(report_root, "2026-05-11", "2026-05-11 Psi Report")
+            first_md, first_pdf = reserve_report_paths(report_root, "2026-05-11", "2026-05-11 Optimization Report")
             first_md.write_text("first\n", encoding="utf-8")
 
-            second_md, second_pdf = reserve_report_paths(report_root, "2026-05-11", "2026-05-11 Psi Report")
+            second_md, second_pdf = reserve_report_paths(report_root, "2026-05-11", "2026-05-11 Optimization Report")
 
-            self.assertEqual(first_md.name, "2026-05-11 Psi Report.md")
-            self.assertEqual(first_pdf.name, "2026-05-11 Psi Report.pdf")
-            self.assertEqual(second_md.name, "2026-05-11 Psi Report-2.md")
-            self.assertEqual(second_pdf.name, "2026-05-11 Psi Report-2.pdf")
+            self.assertEqual(first_md.name, "2026-05-11 Optimization Report.md")
+            self.assertEqual(first_pdf.name, "2026-05-11 Optimization Report.pdf")
+            self.assertEqual(second_md.name, "2026-05-11 Optimization Report-2.md")
+            self.assertEqual(second_pdf.name, "2026-05-11 Optimization Report-2.pdf")
 
     def test_reserve_report_paths_reserves_markdown_before_content_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             report_root = Path(tmp)
-            first_md, _ = reserve_report_paths(report_root, "2026-05-11", "2026-05-11 Psi Report")
-            second_md, _ = reserve_report_paths(report_root, "2026-05-11", "2026-05-11 Psi Report")
+            first_md, _ = reserve_report_paths(report_root, "2026-05-11", "2026-05-11 Optimization Report")
+            second_md, _ = reserve_report_paths(report_root, "2026-05-11", "2026-05-11 Optimization Report")
 
             self.assertTrue(first_md.exists())
             self.assertEqual(first_md.read_text(encoding="utf-8"), "")
-            self.assertEqual(second_md.name, "2026-05-11 Psi Report-2.md")
+            self.assertEqual(second_md.name, "2026-05-11 Optimization Report-2.md")
 
     def test_reserve_report_paths_uses_suffix_when_only_pdf_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             report_root = Path(tmp)
             report_dir = report_root / "2026-05-11"
             report_dir.mkdir()
-            (report_dir / "2026-05-11 Psi Report.pdf").write_bytes(b"%PDF")
+            (report_dir / "2026-05-11 Optimization Report.pdf").write_bytes(b"%PDF")
 
-            md_path, pdf_path = reserve_report_paths(report_root, "2026-05-11", "2026-05-11 Psi Report")
+            md_path, pdf_path = reserve_report_paths(report_root, "2026-05-11", "2026-05-11 Optimization Report")
 
-            self.assertEqual(md_path.name, "2026-05-11 Psi Report-2.md")
-            self.assertEqual(pdf_path.name, "2026-05-11 Psi Report-2.pdf")
+            self.assertEqual(md_path.name, "2026-05-11 Optimization Report-2.md")
+            self.assertEqual(pdf_path.name, "2026-05-11 Optimization Report-2.pdf")
 
     def test_safe_report_text_replaces_windows_invalid_path_characters(self) -> None:
         self.assertEqual(safe_report_text('a<b>c:d/e\\f|g?h*'), "a_b_c_d_e_f_g_h_")
 
     def test_parse_report_paths_keeps_reported_suffix_and_falls_back_to_pdf_suffix(self) -> None:
         md_path, pdf_path = parse_report_paths(
-            "noise\nmarkdown=C:/runs/reports/2026-05-11/2026-05-11 Psi Report-2.md\n"
+            "noise\nmarkdown=C:/runs/reports/2026-05-11/2026-05-11 Optimization Report-2.md\n"
         )
 
-        self.assertEqual(md_path.name, "2026-05-11 Psi Report-2.md")
-        self.assertEqual(pdf_path.name, "2026-05-11 Psi Report-2.pdf")
+        self.assertEqual(md_path.name, "2026-05-11 Optimization Report-2.md")
+        self.assertEqual(pdf_path.name, "2026-05-11 Optimization Report-2.pdf")
 
     def test_longrun_sync_preserves_run_root_report_history(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_dir = root / "longrun"
             batch_dir = root / "batch"
-            existing = run_dir / "reports" / "2026-05-11" / "2026-05-11 Psi Headless Long-Run Report.md"
+            existing = run_dir / "reports" / "2026-05-11" / "2026-05-11 Headless Long-Run Report.md"
             existing.parent.mkdir(parents=True)
             existing.write_text("long-run report\n", encoding="utf-8")
             batch_report = batch_dir / "reports" / "2026-05-11" / "2026-05-11 performance.md"
@@ -90,7 +90,7 @@ class ReportPathTests(unittest.TestCase):
             completed = subprocess.run(
                 [
                     sys.executable,
-                    str(SCRIPTS_DIR / "psi_headless_longrun.py"),
+                    str(SCRIPTS_DIR / "headless_longrun.py"),
                     "--run-dir",
                     str(run_dir),
                     "--dry-run",

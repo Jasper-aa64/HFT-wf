@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-import psi_timing_analysis as timing  # noqa: E402
+import timing_analysis as timing  # noqa: E402
 
 
 def load_contract(name: str) -> dict:
@@ -18,8 +18,8 @@ def load_contract(name: str) -> dict:
 
 
 class OptimizationContractTests(unittest.TestCase):
-    def test_psi_timing_contract_matches_confidence_tier_defaults(self) -> None:
-        contract = load_contract("psi_timing_contract.json")
+    def test_timing_contract_matches_confidence_tier_defaults(self) -> None:
+        contract = load_contract("timing_contract.json")
 
         self.assertEqual(contract["judge_kind"], "confidence_tier")
         self.assertEqual(contract["primary_metric"]["delta_min_control_median_ratio"], 0.005)

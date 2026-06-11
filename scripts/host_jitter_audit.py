@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Psi-specific host jitter calibration driver.
+"""Harness-specific host jitter calibration driver.
 
 This script does not materialize or apply candidate patches. It runs the
-existing Psi headless remote batch in control-only mode, fetches its timing
+existing headless remote batch in control-only mode, fetches its timing
 artifacts, and feeds the measured control samples into ``host_weather_audit``.
 The output is a promotion-gate weather decision, not a candidate verdict.
 """
@@ -131,7 +131,7 @@ def extract_paired_deltas(run_dir: Path) -> list[float]:
 
 def fetch_remote_dir(remote_host: str, remote_dir: str, local_dir: Path, *, timeout: int) -> None:
     local_dir.mkdir(parents=True, exist_ok=True)
-    archive_name = f"/tmp/psi_host_jitter_{os.getpid()}_{utc_stamp()}.tgz"
+    archive_name = f"/tmp/host_jitter_{os.getpid()}_{utc_stamp()}.tgz"
     create = ssh(
         remote_host,
         f"tar -C {remote_quote(remote_dir)} -czf {remote_quote(archive_name)} .",
@@ -139,7 +139,7 @@ def fetch_remote_dir(remote_host: str, remote_dir: str, local_dir: Path, *, time
     )
     if create.returncode != 0:
         raise RuntimeError(f"remote tar failed: {create.stderr.strip() or create.stdout.strip()}")
-    with tempfile.TemporaryDirectory(prefix="psi_host_jitter_fetch_") as raw_tmp:
+    with tempfile.TemporaryDirectory(prefix="host_jitter_fetch_") as raw_tmp:
         archive_path = Path(raw_tmp) / "remote.tgz"
         scp = run_command(
             ["scp", f"{remote_host}:{archive_name}", str(archive_path)],
@@ -190,7 +190,7 @@ def build_summary(
     remote_artifacts_dir: Path | None,
 ) -> dict[str, Any]:
     return {
-        "schema": "psi_host_jitter_audit_v1",
+        "schema": "host_jitter_audit_v1",
         "recorded_at": utc_now(),
         "run_dir": str(run_dir),
         "remote_host": args.remote_host,
@@ -281,7 +281,7 @@ def run_audit(args: argparse.Namespace) -> dict[str, Any]:
             remote_artifacts_dir=None,
         )
         summary["promotion_gate"] = "blocked_by_preflight_runner"
-        write_json(run_dir / "psi_host_jitter_audit_summary.json", summary)
+        write_json(run_dir / "host_jitter_audit_summary.json", summary)
         return summary
 
     # Check remote validation lock before starting timing.
@@ -335,7 +335,7 @@ def run_audit(args: argparse.Namespace) -> dict[str, Any]:
             + f" Validation lock held by another run: {holder}. "
             + "Do not start timing until the lock is released."
         )
-        write_json(run_dir / "psi_host_jitter_audit_summary.json", summary)
+        write_json(run_dir / "host_jitter_audit_summary.json", summary)
         return summary
 
     remote_result = run_remote_control_batch(args, remote_run_dir)
@@ -390,17 +390,17 @@ def run_audit(args: argparse.Namespace) -> dict[str, Any]:
         summary["weather_reasons"] = list(summary.get("weather_reasons") or []) + [
             f"remote_control_batch_failed:{remote_result.returncode}"
         ]
-    write_json(run_dir / "psi_host_jitter_audit_summary.json", summary)
+    write_json(run_dir / "host_jitter_audit_summary.json", summary)
     return summary
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run a Psi control-only host jitter calibration audit.")
+    parser = argparse.ArgumentParser(description="Run a control-only host jitter calibration audit.")
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--remote-host", default="devbox")
     parser.add_argument("--remote-hft-root", default="/root/work/HFT-wf")
-    parser.add_argument("--remote-batch-script", default="scripts/psi_headless_remote.sh")
-    parser.add_argument("--remote-run-root", default="/root/work/psi_experiments/host_jitter")
+    parser.add_argument("--remote-batch-script", default="scripts/headless_remote.sh")
+    parser.add_argument("--remote-run-root", default="/root/work/optimization_experiments/host_jitter")
     parser.add_argument("--remote-run-dir", default="")
     parser.add_argument("--remote-timeout-seconds", type=int, default=7200)
     parser.add_argument("--bash", default="bash")

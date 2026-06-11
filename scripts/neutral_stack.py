@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Neutral stack builder for the Psi headless auto-loop.
+"""Neutral stack builder for the headless auto-loop.
 
 Reads ``neutral_pool.tsv`` in a run root, selects compatible subsets (combined
 semantic risk stays below ``high``), and writes a combined candidate row into
@@ -26,12 +26,12 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
-from psi_candidate_generator import (
+from candidate_generator import (
     Candidate,
     _combination_lane,
     read_tsv,
 )
-from psi_patch_queue import register_candidate
+from patch_queue import register_candidate
 
 
 PLACEHOLDER_MARKERS = (
@@ -194,7 +194,7 @@ def enqueue_stack(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Propose neutral stacks for the Psi auto-loop.")
+    parser = argparse.ArgumentParser(description="Propose neutral stacks for the auto-loop.")
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--max-members", type=int, default=3)
     parser.add_argument("--max-stacks", type=int, default=1)

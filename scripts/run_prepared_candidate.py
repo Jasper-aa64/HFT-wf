@@ -7,13 +7,13 @@ import sys
 
 
 def load_auto_loop(repo_root: Path):
-    module_path = repo_root / "scripts" / "psi_headless_auto_loop.py"
+    module_path = repo_root / "scripts" / "headless_auto_loop.py"
     if not module_path.exists():
-        module_path = repo_root / "HFT-wf" / "scripts" / "psi_headless_auto_loop.py"
+        module_path = repo_root / "HFT-wf" / "scripts" / "headless_auto_loop.py"
     scripts_dir = str(module_path.parent)
     if scripts_dir not in sys.path:
         sys.path.insert(0, scripts_dir)
-    spec = importlib.util.spec_from_file_location("psi_headless_auto_loop", module_path)
+    spec = importlib.util.spec_from_file_location("headless_auto_loop", module_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"failed to load {module_path}")
     module = importlib.util.module_from_spec(spec)
@@ -75,8 +75,8 @@ def main() -> int:
         raise SystemExit("--replicated is deprecated and no longer trusted by the harness; pass --replication-history <prior timing_history.tsv>.")
 
     auto = load_auto_loop(ns.repo_root.resolve())
-    # Import validate_class_a from psi_timing_analysis for Class A hard guard.
-    from psi_timing_analysis import validate_class_a  # noqa: E402
+    # Import validate_class_a from timing_analysis for Class A hard guard.
+    from timing_analysis import validate_class_a  # noqa: E402
     run_dir = ns.run_dir.resolve()
     auto.ensure_run_dir(run_dir)
     host_key = ns.host_key
@@ -117,11 +117,11 @@ def main() -> int:
             "--remote-hft-root",
             ns.remote_hft_root,
             "--remote-batch-script",
-            "scripts/psi_headless_remote.sh",
+            "scripts/headless_remote.sh",
             "--remote-run-root",
-            "/root/work/psi_experiments/runs",
+            "/root/work/optimization_experiments/runs",
             "--remote-run-dir",
-            f"/root/work/psi_experiments/runs/{run_dir.parent.name}/{run_dir.name}",
+            f"/root/work/optimization_experiments/runs/{run_dir.parent.name}/{run_dir.name}",
             "--measure-runs",
             str(ns.measure_runs),
             "--no-compare-runs",

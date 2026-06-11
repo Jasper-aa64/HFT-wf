@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a dated Psi performance optimization report.
+"""Generate a dated performance optimization report.
 
 The source intentionally stays ASCII-only. Chinese output strings use unicode
 escapes so Windows console/code-page settings cannot corrupt the script text.
@@ -19,8 +19,8 @@ import statistics
 from datetime import date
 from pathlib import Path
 
-from psi_report_paths import reserve_report_paths
-from psi_timing_history import (
+from report_paths import reserve_report_paths
+from timing_history import (
     experiment_root_for_path,
     history_context_from_sources,
     history_path_candidates,
@@ -30,7 +30,7 @@ from psi_timing_history import (
 )
 
 
-DEFAULT_CONTROL_LOOP = Path("experiments/psi-remote-linux-20260508/control_loop")
+DEFAULT_CONTROL_LOOP = Path("experiments/remote-linux-20260508/control_loop")
 HISTORY_FILE_NAME = "timing_history.tsv"
 
 TITLE_SUFFIX = "\u6027\u80fd\u4f18\u5316\u62a5\u544a"
@@ -879,7 +879,7 @@ def write_pdf(markdown: str, pdf_path: Path, images: list[Path]) -> None:
 
     pdf_path = pdf_path.resolve()
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="psi_report_") as tmp:
+    with tempfile.TemporaryDirectory(prefix="report_") as tmp:
         html_path = Path(tmp) / "report.html"
         html_path.write_text(markdown_to_html(markdown, images), encoding="utf-8")
         completed = subprocess.run(
@@ -898,14 +898,14 @@ def write_pdf(markdown: str, pdf_path: Path, images: list[Path]) -> None:
 
 
 AUTO_LOOP_CAPABILITY_CHECKLIST = [
-    ("three_lane_candidate_generator", "scripts/psi_candidate_generator.py"),
-    ("patch_queue_manifest", "scripts/psi_patch_queue.py"),
+    ("three_lane_candidate_generator", "scripts/candidate_generator.py"),
+    ("patch_queue_manifest", "scripts/patch_queue.py"),
     ("neutral_pool_tsv", "neutral_pool.tsv"),
     ("candidate_level_noisy_pending", "retry_conditions.tsv"),
-    ("neutral_stack_builder", "scripts/psi_neutral_stack.py"),
-    ("auto_loop_closed_loop", "scripts/psi_headless_auto_loop.py"),
+    ("neutral_stack_builder", "scripts/neutral_stack.py"),
+    ("auto_loop_closed_loop", "scripts/headless_auto_loop.py"),
     ("status_surface_complete", "run_state.json + heartbeat.json"),
-    ("report_template_extended", "psi_daily_report.py auto-loop section"),
+    ("report_template_extended", "daily_report.py auto-loop section"),
 ]
 
 
@@ -1061,7 +1061,7 @@ def render_auto_loop_section(
     patch_summary_line = "; ".join(f"{name}=`{count}`" for name, count in sorted(patch_status_counts.items()) if name)
 
     lines = [
-        "## Z. Psi headless auto-loop summary",
+        "## Z. headless auto-loop summary",
         "",
         "\n".join(checklist_lines),
         f"Active run: `{run_state.get('run_id', '')}`; iterations=`{run_state.get('iteration', 0)}`;"
@@ -1112,7 +1112,7 @@ def render_auto_loop_section(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Generate Psi performance optimization Markdown/PDF report.")
+    parser = argparse.ArgumentParser(description="Generate performance optimization Markdown/PDF report.")
     parser.add_argument("--date", default=date.today().isoformat(), help="Report date, YYYY-MM-DD.")
     parser.add_argument(
         "--control-loop-dir",

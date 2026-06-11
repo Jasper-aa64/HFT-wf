@@ -12,10 +12,10 @@ Lock file format (JSON):
 
     {
       "run_id": "stack_skip_unused_row_fields_m24",
-      "script_name": "psi_headless_remote.sh",
+      "script_name": "headless_remote.sh",
       "candidate_id": "stack_skip_unused_row_fields",
       "timestamp": "2026-05-27T12:00:00Z",
-      "owner_command": "bash scripts/psi_headless_remote.sh",
+      "owner_command": "bash scripts/headless_remote.sh",
       "pid": 12345,
       "hostname": "devbox"
     }
@@ -23,9 +23,9 @@ Lock file format (JSON):
 This module supports two usage modes:
 
 1. **Local mode** -- direct filesystem operations (for scripts running on the
-   devbox, e.g. ``psi_headless_remote.sh``).
+   devbox, e.g. ``headless_remote.sh``).
 2. **SSH mode** -- operations dispatched over SSH (for local Python drivers
-   like ``psi_host_jitter_audit.py``).
+   like ``host_jitter_audit.py``).
 
 CLI usage (local mode)::
 
@@ -36,7 +36,7 @@ CLI usage (local mode)::
 Python API (local mode)::
 
     from perf_validation_lock import acquire_lock, release_lock, check_lock
-    result = acquire_lock(run_id="m24", script_name="psi_headless_remote.sh")
+    result = acquire_lock(run_id="m24", script_name="headless_remote.sh")
     assert result["acquired"]
     ...
     release_lock(run_id="m24")
@@ -44,7 +44,7 @@ Python API (local mode)::
 Python API (SSH mode)::
 
     from perf_validation_lock import acquire_lock_ssh, release_lock_ssh, check_lock_ssh
-    result = acquire_lock_ssh("devbox", run_id="m24", script_name="psi_headless_remote.sh")
+    result = acquire_lock_ssh("devbox", run_id="m24", script_name="headless_remote.sh")
     assert result["acquired"]
     ...
     release_lock_ssh("devbox", run_id="m24")

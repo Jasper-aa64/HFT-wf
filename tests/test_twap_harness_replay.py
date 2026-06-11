@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-import psi_headless_auto_loop as loop  # noqa: E402
+import headless_auto_loop as loop  # noqa: E402
 
 
 def read_tsv(path: Path) -> list[dict[str, str]]:
@@ -576,7 +576,7 @@ diff --git a/PsiGrpcServer/twap_sale_service.cpp b/PsiGrpcServer/twap_sale_servi
 
 
 class RemoteBatchControlSourceKindTests(unittest.TestCase):
-    """Nail tests: BOTH psi_headless_remote.sh AND twap_headless_remote.sh must
+    """Nail tests: BOTH headless_remote.sh AND twap_headless_remote.sh must
     emit control_source_kind in their run_state.json and comparison_summary.json
     so the shared judge_verdict same-source gate works for both adapters.
 
@@ -587,39 +587,43 @@ class RemoteBatchControlSourceKindTests(unittest.TestCase):
     """
 
     SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
-    PSI_SCRIPT = SCRIPTS_DIR / "psi_headless_remote.sh"
+    HEADLESS_SCRIPT = SCRIPTS_DIR / "headless_remote.sh"
     TWAP_SCRIPT = SCRIPTS_DIR / "twap_headless_remote.sh"
 
     def _text(self, script: Path) -> str:
         return script.read_text(encoding="utf-8")
 
-    # ---- psi ----
+    # ---- headless ----
 
-    def test_psi_remote_emits_control_source_kind_in_both_payloads(self) -> None:
-        """psi run_state and comparison_summary must both emit control_source_kind."""
-        text = self._text(self.PSI_SCRIPT)
+    def test_headless_remote_emits_control_source_kind_in_both_payloads(self) -> None:
+        """headless run_state and comparison_summary must both emit control_source_kind."""
+        text = self._text(self.HEADLESS_SCRIPT)
         count = text.count('"control_source_kind"')
         self.assertGreaterEqual(count, 2,
-                                "psi_headless_remote.sh must emit control_source_kind "
+                                "headless_remote.sh must emit control_source_kind "
                                 "in both run_state and comparison_summary payloads")
 
-    def test_psi_remote_control_source_kind_env_var_is_forwarded(self) -> None:
-        """CONTROL_SOURCE_KIND must be forwarded into psi Python heredocs."""
-        text = self._text(self.PSI_SCRIPT)
+    def test_headless_remote_control_source_kind_env_var_is_forwarded(self) -> None:
+        """CONTROL_SOURCE_KIND must be forwarded into headless Python heredocs."""
+        text = self._text(self.HEADLESS_SCRIPT)
         count = text.count("CONTROL_SOURCE_KIND")
         self.assertGreaterEqual(count, 2,
-                                "CONTROL_SOURCE_KIND must appear in psi_headless_remote.sh "
+                                "CONTROL_SOURCE_KIND must appear in headless_remote.sh "
                                 "at least in both Python payload blocks")
 
-    def test_psi_remote_script_passes_bash_syntax_check(self) -> None:
-        """bash -n must pass on psi_headless_remote.sh."""
+    def test_headless_remote_script_passes_bash_syntax_check(self) -> None:
+        """bash -n must pass on headless_remote.sh."""
         import subprocess as sp
+        import shutil
+        bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("bash is not available on this Windows host")
         result = sp.run(
-            ["bash", "-n", str(self.PSI_SCRIPT)],
+            [bash, "-n", str(self.HEADLESS_SCRIPT)],
             check=False, stdout=sp.PIPE, stderr=sp.STDOUT,
             text=True, encoding="utf-8", errors="replace",
         )
-        self.assertEqual(result.returncode, 0, f"bash -n psi failed:\n{result.stdout}")
+        self.assertEqual(result.returncode, 0, f"bash -n headless failed:\n{result.stdout}")
 
     # ---- twap ----
 
@@ -643,8 +647,12 @@ class RemoteBatchControlSourceKindTests(unittest.TestCase):
     def test_twap_remote_script_passes_bash_syntax_check(self) -> None:
         """bash -n must pass on twap_headless_remote.sh."""
         import subprocess as sp
+        import shutil
+        bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("bash is not available on this Windows host")
         result = sp.run(
-            ["bash", "-n", str(self.TWAP_SCRIPT)],
+            [bash, "-n", str(self.TWAP_SCRIPT)],
             check=False, stdout=sp.PIPE, stderr=sp.STDOUT,
             text=True, encoding="utf-8", errors="replace",
         )

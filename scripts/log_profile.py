@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Build profile artifacts from copied Psi runner logs.
+"""Build profile artifacts from copied runner logs.
 
 This parser is intentionally local and non-invasive: it reads copied ``*.log``
-files and writes TSV/Markdown artifacts without touching the Psi source tree.
+files and writes TSV/Markdown artifacts without touching the source tree.
 """
 
 from __future__ import annotations
@@ -241,7 +241,7 @@ def write_summary(
 ) -> None:
     top_rows = rows[:10]
     with summary_path.open("w", encoding="utf-8", newline="\n") as handle:
-        handle.write("# Psi Log Profile Summary\n\n")
+        handle.write("# Log Profile Summary\n\n")
         handle.write(f"- Input directory: `{input_dir}`\n")
         handle.write(f"- Output directory: `{output_dir}`\n")
         handle.write(f"- Log files parsed: {stats.files_seen}\n")
@@ -320,13 +320,13 @@ def write_summary(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Parse copied Psi runner logs into profile.tsv and hotspots.tsv.",
+        description="Parse copied runner logs into profile.tsv and hotspots.tsv.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Example:\n"
-            "  python scripts/psi_log_profile.py "
-            "experiments/psi-remote-linux-20260508/bundle_after_sort_skip "
-            "--output experiments/psi-remote-linux-20260508/bundle_after_sort_skip/profile_artifacts\n\n"
+            "  python scripts/log_profile.py "
+            "experiments/remote-linux-20260508/bundle_after_sort_skip "
+            "--output experiments/remote-linux-20260508/bundle_after_sort_skip/profile_artifacts\n\n"
             "Use --demo to print this example without writing files."
         ),
     )
@@ -358,9 +358,9 @@ def main() -> int:
 
     if args.demo:
         print(
-            "python scripts/psi_log_profile.py "
-            "experiments/psi-remote-linux-20260508/bundle_after_sort_skip "
-            "--output experiments/psi-remote-linux-20260508/bundle_after_sort_skip/profile_artifacts"
+            "python scripts/log_profile.py "
+            "experiments/remote-linux-20260508/bundle_after_sort_skip "
+            "--output experiments/remote-linux-20260508/bundle_after_sort_skip/profile_artifacts"
         )
         return 0
 

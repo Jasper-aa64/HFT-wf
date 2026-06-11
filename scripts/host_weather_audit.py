@@ -755,7 +755,7 @@ def load_fixture_snapshots(path: Path) -> list[dict[str, Any]]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Collect host weather and jitter evidence for promotion gates.")
     parser.add_argument("--run-dir", type=Path, required=True)
-    parser.add_argument("--host-key", default=os.environ.get("HOST_KEY") or os.environ.get("PSI_HOST_KEY") or "")
+    parser.add_argument("--host-key", default=os.environ.get("HOST_KEY") or os.environ.get("HARNESS_HOST_KEY") or "")
     parser.add_argument("--remote-host", default="")
     parser.add_argument("--sample-count", type=int, default=3)
     parser.add_argument("--sample-interval-seconds", type=float, default=1.0)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared helpers for Psi report filenames."""
+"""Shared helpers for optimization report filenames."""
 
 from __future__ import annotations
 

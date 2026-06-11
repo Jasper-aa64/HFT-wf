@@ -1,9 +1,9 @@
 {
   "schema": "optimization_scorecard_contract_v1",
-  "contract_id": "psi_timing_paired_v1",
-  "domain": "psi_timing",
+  "contract_id": "timing_paired_v1",
+  "domain": "timing",
   "judge_kind": "confidence_tier",
-  "scenario_id": "psi_headless_paired_timing",
+  "scenario_id": "headless_paired_timing",
   "primary_metric": {
     "name": "paired_median_delta_ms",
     "direction": "higher_is_better",
@@ -18,7 +18,7 @@
     "bundle_audit": 7
   },
   "correctness_oracle": {
-    "kind": "psi_compare_gate",
+    "kind": "compare_gate",
     "requires_compare_pass": true
   },
   "regression_limits": []

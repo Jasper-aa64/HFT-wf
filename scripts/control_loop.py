@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare and record the Psi control loop artifacts.
+"""Prepare and record the control loop artifacts.
 
 This script keeps the local HFT-wf tree as the evidence plane. It converts an
 existing profile artifact directory into a stable control-loop state with:
@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from psi_timing_history import (
+from timing_history import (
     bundle_id_for_path,
     default_host_key,
     history_rows_from_attempt_rows,
@@ -31,8 +31,8 @@ from psi_timing_history import (
     shared_history_path_for_output,
     write_history_artifacts,
 )
-from psi_timing_analysis import PairedTimingEvidence, evidence_fields
-from psi_attempts_schema import ATTEMPTS_FIELDNAMES
+from timing_analysis import PairedTimingEvidence, evidence_fields
+from attempts_schema import ATTEMPTS_FIELDNAMES
 
 
 DEFAULT_ACCEPTANCE_POLICY = (
@@ -943,7 +943,7 @@ def write_cooldown(cooldown_path: Path, source_profile: str) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Prepare Psi control-loop artifacts from an existing profile snapshot.",
+        description="Prepare control-loop artifacts from an existing profile snapshot.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(

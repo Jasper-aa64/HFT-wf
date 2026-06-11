@@ -4,7 +4,7 @@ set -u
 ROOT="${ROOT:-/root/work/Code1/psi-trader-liangjunming}"
 CONTROL_ROOT="${CONTROL_ROOT:-}"
 ENV_FILE="${ENV_FILE:-/root/work/.toolchain/psi-env.sh}"
-RUN_ID="${RUN_ID:-headless_psi_$(date +%Y%m%d_%H%M%S)}"
+RUN_ID="${RUN_ID:-headless_$(date +%Y%m%d_%H%M%S)}"
 RUN_DIR="${RUN_DIR:-$ROOT/headless_runs/$RUN_ID}"
 BUILD_DIR="${BUILD_DIR:-$ROOT/build/linux-relwithdebinfo-boost182}"
 CONTROL_BUILD_DIR="${CONTROL_BUILD_DIR:-}"
@@ -69,9 +69,9 @@ acquire_validation_lock() {
   lock_result=$(python3 "$SCRIPT_DIR/perf_validation_lock.py" acquire \
     --lock-path /root/work/.perf_validation.lock \
     --run-id "$RUN_ID" \
-    --script-name "psi_headless_remote.sh" \
+    --script-name "headless_remote.sh" \
     --candidate-id "${CANDIDATE_ID:-}" \
-    --owner-command "${OWNER_COMMAND:-bash scripts/psi_headless_remote.sh}" 2>&1) || true
+    --owner-command "${OWNER_COMMAND:-bash scripts/headless_remote.sh}" 2>&1) || true
   echo "$lock_result" | tee -a "$RUN_DIR/validation_lock_acquire.json"
   if echo "$lock_result" | grep -q '"acquired": true'; then
     log "validation lock acquired run_id=$RUN_ID"
@@ -96,7 +96,7 @@ release_validation_lock() {
 }
 
 count_runner_failure_markers() {
-  # PsiRunner can return rc=0 even when benchmark input/compare files are missing.
+  # Runner can return rc=0 even when benchmark input/compare files are missing.
   # Treat those log markers as hard gate failures before timing is interpreted.
   grep -E \
     "PsiRunner::run file:.*not exists|compareFile is not exists|compareFile error|basic_string|length_error|Aborted|Segmentation fault|terminate called" \
@@ -521,7 +521,7 @@ out_dir.mkdir(parents=True, exist_ok=True)
 scripts_dir = Path(os.environ["SCRIPT_DIR"]).resolve()
 sys.path.insert(0, str(scripts_dir))
 
-from psi_timing_history import (  # noqa: E402
+from timing_history import (  # noqa: E402
     default_host_key,
     history_rows_from_attempt_rows,
     per_run_history_path,
@@ -717,7 +717,7 @@ no_compare_count = os.environ.get("NO_COMPARE_COUNT", "0")
 compare_rc = os.environ.get("COMPARE_RC", "0")
 compare_pass = str(compare_rc) == "0"
 run_id = os.environ.get("RUN_ID", "headless")
-host_key = os.environ.get("PSI_TIMING_HOST_KEY") or os.environ.get("HOST_KEY") or default_host_key()
+host_key = os.environ.get("TIMING_HOST_KEY") or os.environ.get("HOST_KEY") or default_host_key()
 recorded_at = now()
 control_stats = stats_from_ms(control_samples_ms, control_median_ms, control_noise)
 control_median_ms_text = control_stats["median_ms"]
@@ -735,7 +735,7 @@ run_status = "stopped" if last_exit_reason else "running"
 
 parsed_profile_rows: list[dict[str, object]] = []
 try:
-    from psi_log_profile import collect_events, summarize  # noqa: E402
+    from log_profile import collect_events, summarize  # noqa: E402
 
     parsed_events, _parse_stats = collect_events(out_dir, 300000, False)
     parsed_profile_rows = summarize(parsed_events)
@@ -748,7 +748,7 @@ profile_rows = parsed_profile_rows or [
         "total_ms": control_median_ms_text,
         "count": no_compare_count,
         "avg_ms": control_median_ms_text,
-        "source": "psi_headless_remote.sh",
+        "source": "headless_remote.sh",
     }
 ]
 with (out_dir / "profile.tsv").open("w", encoding="utf-8", newline="") as handle:
@@ -773,8 +773,8 @@ with (out_dir / "hotspots.tsv").open("w", encoding="utf-8", newline="") as handl
     writer.writeheader()
     writer.writerows(hotspot_rows)
 
-from psi_control_loop import build_attempts  # noqa: E402
-from psi_timing_analysis import (  # noqa: E402
+from control_loop import build_attempts  # noqa: E402
+from timing_analysis import (  # noqa: E402
     PairedTimingEvidence,
     evidence_fields,
     replication_verified_from_audits,
@@ -954,7 +954,7 @@ if paired_evidence is not None and not paired_evidence_by_target:
             "noise_flag": paired_evidence.noise_flag,
         }
     )
-from psi_attempts_schema import ATTEMPTS_FIELDNAMES  # noqa: E402
+from attempts_schema import ATTEMPTS_FIELDNAMES  # noqa: E402
 
 attempt_fieldnames = ATTEMPTS_FIELDNAMES
 with (out_dir / "attempts.tsv").open("w", encoding="utf-8", newline="") as handle:
@@ -1199,7 +1199,7 @@ if paired_evidence is not None:
     }
 
 comparison_summary = {
-    "schema": "psi_headless_comparison_summary_v1",
+    "schema": "headless_comparison_summary_v1",
     "run_id": run_id,
     "recorded_at": recorded_at,
     "host_key": host_key,
@@ -1612,7 +1612,7 @@ if [ -z "$control_head" ]; then
   if [ -n "$CONTROL_ROOT" ]; then
     control_head_root="$CONTROL_ROOT"
   fi
-  control_head=$(cd "$control_head_root" && git rev-parse --short HEAD 2>/dev/null || echo "headless_psi_remote")
+  control_head=$(cd "$control_head_root" && git rev-parse --short HEAD 2>/dev/null || echo "headless_remote")
 fi
 control_samples_ms=$(awk -F '\t' 'NR > 1 && $2=="no_compare" && $3=="measured" && $7=="0" { printf "%s%s", sep, $4; sep="," } END { print "" }' "$RUN_DIR/timing_samples.tsv")
 control_samples_seconds=$(awk -F '\t' 'NR > 1 && $2=="no_compare" && $3=="measured" && $7=="0" { printf "%s%s", sep, $5; sep="," } END { print "" }' "$RUN_DIR/timing_samples.tsv")
@@ -1649,7 +1649,7 @@ PY
     log "WARN report generation requested but REPORT_SCRIPT is missing or python3 is unavailable"
   fi
 else
-  log "report_generation=skipped set GENERATE_REPORT=1 REPORT_SCRIPT=/path/to/psi_daily_report.py to enable"
+  log "report_generation=skipped set GENERATE_REPORT=1 REPORT_SCRIPT=/path/to/daily_report.py to enable"
 fi
 
 log "running perf evidence"
@@ -1672,7 +1672,7 @@ fi
   echo "Generated at $(date '+%F %T')"
   echo
   echo "Accepted baseline:"
-  echo "7c1b842 perf: reuse psi bar day template, 72s -> 66s"
+  echo "7c1b842 perf: reuse bar day template, 72s -> 66s"
   echo "3ee9f21 perf: cache generated parquet row strings, 66s -> 60s"
   echo "195e50c perf: skip ordered tick sorting, 60s -> 56s"
   echo

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Welch t-test helper for the Psi optimization evaluator.
+"""Welch t-test helper for the optimization evaluator.
 
 The evaluator only needs a binary decision helper with enough numeric
 precision for noisy wall-clock samples. This implementation has no third-party

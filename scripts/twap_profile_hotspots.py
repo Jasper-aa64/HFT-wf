@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Create TWAP profile/hotspot context for the headless optimization loop.
 
-The Psi optimization loop expects profile.tsv and hotspots.tsv before it can
+The optimization loop expects profile.tsv and hotspots.tsv before it can
 generate candidates. TWAP does not have a profiler adapter yet, so this script
 builds a source-backed hotspot snapshot for the aggregation position push path.
 
