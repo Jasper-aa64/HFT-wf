@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Closed-loop Psi headless auto-loop controller.
 
 This script wraps the existing single-batch ``psi_headless_remote.sh`` executor
@@ -59,7 +59,7 @@ from psi_patch_queue import (
     set_status as set_patch_status,
     snapshot_worktree,
 )
-from psi_timing_analysis import TwapAdapter, sample_escalation_decision, validate_class_a
+from psi_timing_analysis import TwapAdapter, independence_verified, sample_escalation_decision, validate_class_a
 from psi_timing_history import (
     HISTORY_FIELDNAMES,
     default_host_key,
@@ -834,6 +834,7 @@ def _candidate_has_prior_replication(
     *,
     history_path: Path | None = None,
     host_key: str = "",
+    current_audit: dict[str, str] | None = None,
 ) -> bool:
     """Return true only when local artifacts show prior positive evidence.
 
@@ -866,7 +867,16 @@ def _candidate_has_prior_replication(
             continue
         row_target = str(row.get("target") or row.get("stage") or "").strip()
         same_target = target and (row_target == target or row_target.startswith(f"{target}|"))
-        if same_target:
+        if not same_target:
+            continue
+        if current_audit is None:
+            return True
+        prior_audit = {
+            "recorded_at": str(row.get("recorded_at") or ""),
+            "paired_stdev_ms": str(row.get("paired_stdev_ms") or ""),
+            "paired_range_ms": str(row.get("paired_range_ms") or ""),
+        }
+        if independence_verified(prior_audit, current_audit):
             return True
 
     # Backward-compatible fallback for non-prepared long runs that continue in

@@ -17,7 +17,9 @@ from psi_timing_analysis import (  # noqa: E402
     TwapAdapter,
     confidence_tier,
     evidence_fields,
+    independence_verified,
     judge_scorecard,
+    naive_k1_counterfactual,
     sample_escalation_decision,
     summarize_paired_timing,
     threshold_consistency,
@@ -506,6 +508,90 @@ class ConfidenceTierIntegrationTests(unittest.TestCase):
         for key in ("confidence_tier", "confidence_margin_ms", "confidence_ci_width_ms",
                     "confidence_decisiveness", "confidence_sign_consistency"):
             self.assertIn(key, fields, f"Missing key: {key}")
+
+    def test_evidence_fields_include_decision_constants_and_escalation_ladder(self) -> None:
+        ev = summarize_paired_timing(
+            [50000, 50020, 49980, 50010, 50030],
+            [49000, 49010, 48990, 49020, 49040],
+            required_pairs=5,
+            bootstrap_resamples=200,
+            permutation_resamples=200,
+            delta_min_ms=123.0,
+            decisive_k=1.25,
+            sign_min=0.8,
+        )
+
+        fields = evidence_fields(ev)
+
+        self.assertEqual(fields["delta_min_ms_used"], "123.000")
+        self.assertEqual(fields["decisive_k"], "1.250")
+        self.assertEqual(fields["sign_min"], "0.800")
+        self.assertEqual(fields["escalation_steps"], "4,8,12")
+
+    def test_evidence_fields_include_naive_k1_counterfactual(self) -> None:
+        accepted_first = naive_k1_counterfactual([12.0, -50.0])
+        rejected_first = naive_k1_counterfactual([-1.0, 500.0])
+        self.assertEqual(accepted_first, (12.0, True))
+        self.assertEqual(rejected_first, (-1.0, False))
+
+        ev = summarize_paired_timing(
+            [100.0, 100.0],
+            [101.0, 50.0],
+            required_pairs=2,
+            bootstrap_resamples=50,
+            permutation_resamples=50,
+        )
+        fields = evidence_fields(ev)
+
+        self.assertEqual(fields["naive_k1_first_delta_ms"], "-1.000")
+        self.assertEqual(fields["naive_k1_would_accept"], "false")
+
+    def test_evidence_fields_include_env_fingerprint(self) -> None:
+        ev = summarize_paired_timing(
+            [1000.0, 1010.0, 990.0],
+            [900.0, 905.0, 895.0],
+            required_pairs=3,
+            bootstrap_resamples=50,
+            permutation_resamples=50,
+        )
+
+        fields = evidence_fields(
+            ev,
+            host_id="devbox-a",
+            env_class="cloudish",
+        )
+
+        self.assertEqual(fields["host_id"], "devbox-a")
+        self.assertEqual(fields["env_class"], "cloudish")
+        self.assertEqual(fields["control_stdev_ms"], "5.000")
+        self.assertEqual(fields["control_range_ms"], "10.000")
+
+    def test_independence_verified_requires_time_gap_and_different_weather_bucket(self) -> None:
+        base = {
+            "recorded_at": "2026-06-10T00:00:00Z",
+            "paired_stdev_ms": "50",
+            "paired_range_ms": "120",
+        }
+        same_bucket_later = {
+            "recorded_at": "2026-06-10T00:45:00Z",
+            "paired_stdev_ms": "55",
+            "paired_range_ms": "130",
+        }
+        different_bucket_later = {
+            "recorded_at": "2026-06-10T00:45:00Z",
+            "paired_stdev_ms": "900",
+            "paired_range_ms": "2200",
+        }
+        too_soon_different_bucket = {
+            "recorded_at": "2026-06-10T00:05:00Z",
+            "paired_stdev_ms": "900",
+            "paired_range_ms": "2200",
+        }
+
+        self.assertFalse(independence_verified(base, same_bucket_later))
+        self.assertFalse(independence_verified(base, too_soon_different_bucket))
+        self.assertTrue(independence_verified(base, different_bucket_later))
+        self.assertFalse(independence_verified(base, {}))
 
 
 class PsiScorecardCharacterizationTests(unittest.TestCase):

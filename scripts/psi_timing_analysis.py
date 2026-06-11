@@ -1,10 +1,12 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Paired timing analysis helpers for Psi headless optimization runs."""
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import random
+import socket
 import statistics
 from dataclasses import dataclass
 
@@ -33,6 +35,13 @@ DEFAULT_TWAP_MIN_NORMAL_P95_IMPROVEMENT_MS = 1.0
 DEFAULT_TWAP_MAX_NORMAL_P95_REGRESSION_MS = 1.0
 DEFAULT_TWAP_MAX_STRESS_P95_REGRESSION_MS = 5.0
 DEFAULT_SAMPLE_ESCALATION_STEPS = (4, 8, 12)
+# Independence verification: weather-bucket boundaries and minimum time gap.
+# Two audit records are "independent" when their paired-delta noise profiles
+# fall in *different* buckets AND they are separated by at least this gap.
+# Bucket edges are module constants so they appear in the evidence ledger.
+WEATHER_BUCKET_STDEV_THRESHOLD_MS = 200.0
+WEATHER_BUCKET_RANGE_THRESHOLD_MS = 400.0
+INDEPENDENCE_MIN_GAP_SECONDS = 1800.0  # 30 minutes
 
 
 @dataclass(frozen=True)
@@ -64,6 +73,14 @@ class PairedTimingEvidence:
     confidence_ci_width_ms: float | None = None
     confidence_decisiveness: float | None = None
     confidence_sign_consistency: float | None = None
+    # G2 — decision constants stamped per verdict (paper §A.4 auditability).
+    delta_min_ms_used: float | None = None
+    decisive_k_used: float | None = None
+    sign_min_used: float | None = None
+    escalation_steps_used: tuple[int, ...] = DEFAULT_SAMPLE_ESCALATION_STEPS
+    # G4 — control-sample jitter stats for weather / env fingerprint.
+    control_stdev_ms: float | None = None
+    control_range_ms: float | None = None
 
 
 def _seed_from_parts(*parts: object) -> int:
@@ -923,10 +940,63 @@ def summarize_paired_timing(
         confidence_ci_width_ms=ct.ci_width,
         confidence_decisiveness=ct.decisiveness,
         confidence_sign_consistency=ct.sign_consistency,
+        delta_min_ms_used=_delta_min,
+        decisive_k_used=decisive_k,
+        sign_min_used=sign_min,
+        escalation_steps_used=DEFAULT_SAMPLE_ESCALATION_STEPS,
+        control_stdev_ms=paired_stdev_ms if control else None,
+        control_range_ms=paired_range_ms if control else None,
     )
 
 
-def evidence_fields(evidence: PairedTimingEvidence, *, change_class: str = "class_b", replicated: bool = False) -> dict[str, str]:
+def naive_k1_counterfactual(paired_deltas_ms: list[float]) -> tuple[float, bool]:
+    """Return (first_delta_ms, would_accept) for the naive single-sample rule.
+
+    Naive-k1: sample the first paired delta; accept iff delta > 0.
+    Stored as an explicit evidence field so paper ablations do not need
+    to recompute from the raw vector.
+    """
+    if not paired_deltas_ms:
+        return (0.0, False)
+    first = float(paired_deltas_ms[0])
+    return (first, first > 0)
+
+
+def _weather_bucket(stdev_ms: float, range_ms: float) -> str:
+    """Classify a run into a coarse weather bucket from paired-delta noise stats."""
+    if stdev_ms <= WEATHER_BUCKET_STDEV_THRESHOLD_MS and range_ms <= WEATHER_BUCKET_RANGE_THRESHOLD_MS:
+        return "calm"
+    return "noisy"
+
+
+def independence_verified(audit_a: dict, audit_b: dict) -> bool:
+    """Return True iff two timing audit dicts represent independent runs.
+
+    Requires ALL of:
+    - Both dicts have 'recorded_at', 'paired_stdev_ms', 'paired_range_ms'.
+    - Time gap between records >= INDEPENDENCE_MIN_GAP_SECONDS (30 min).
+    - The two records fall in *different* weather buckets (same-condition
+      back-to-back runs do not count as independent replication).
+
+    Missing or unparseable metadata → False (conservative).
+    """
+    try:
+        ts_a = datetime.datetime.fromisoformat(audit_a["recorded_at"].replace("Z", "+00:00"))
+        ts_b = datetime.datetime.fromisoformat(audit_b["recorded_at"].replace("Z", "+00:00"))
+    except (KeyError, ValueError, AttributeError):
+        return False
+    if abs((ts_b - ts_a).total_seconds()) < INDEPENDENCE_MIN_GAP_SECONDS:
+        return False
+    try:
+        bucket_a = _weather_bucket(float(audit_a["paired_stdev_ms"]), float(audit_a["paired_range_ms"]))
+        bucket_b = _weather_bucket(float(audit_b["paired_stdev_ms"]), float(audit_b["paired_range_ms"]))
+    except (KeyError, ValueError):
+        return False
+    return bucket_a != bucket_b
+
+
+def evidence_fields(evidence: PairedTimingEvidence, *, change_class: str = "class_b", replicated: bool = False, host_id: str = "", env_class: str = "") -> dict[str, str]:
+    _naive_first_ms, _naive_accept = naive_k1_counterfactual(evidence.paired_deltas_ms)
     return {
         "change_class": change_class,
         "replicated": "true" if replicated else "false",
@@ -969,7 +1039,27 @@ def evidence_fields(evidence: PairedTimingEvidence, *, change_class: str = "clas
             "" if evidence.confidence_sign_consistency is None
             else f"{evidence.confidence_sign_consistency:.4f}"
         ),
+        # G2 — decision constants (paper §A.4 auditability).
+        "delta_min_ms_used": _format_optional_ms(evidence.delta_min_ms_used),
+        "decisive_k": "" if evidence.decisive_k_used is None else f"{evidence.decisive_k_used:.3f}",
+        "sign_min": "" if evidence.sign_min_used is None else f"{evidence.sign_min_used:.3f}",
+        "escalation_steps": ",".join(str(s) for s in evidence.escalation_steps_used),
+        # G3 — naive-k1 counterfactual.
+        "naive_k1_first_delta_ms": f"{_naive_first_ms:.3f}",
+        "naive_k1_would_accept": "true" if _naive_accept else "false",
+        # G4 — environment fingerprint.
+        "host_id": host_id or _safe_hostname(),
+        "env_class": env_class or "",
+        "control_stdev_ms": _format_optional_ms(evidence.control_stdev_ms),
+        "control_range_ms": _format_optional_ms(evidence.control_range_ms),
     }
+
+
+def _safe_hostname() -> str:
+    try:
+        return socket.gethostname()
+    except Exception:
+        return ""
 
 
 def validate_class_a(

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Three-lane candidate generator for the Psi headless auto-loop.
 
 The generator consumes the durable evidence surface the harness already writes
@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -77,6 +78,8 @@ class Candidate:
             "stack_members": list(self.stack_members),
             "stack_compatibility": self.stack_compatibility,
             "rank_score": self.rank_score,
+            "generator_model": os.environ.get("PSI_GENERATOR_MODEL", ""),
+            "generator_session": os.environ.get("PSI_GENERATOR_SESSION", ""),
         }
         if self.measure_runs_override is not None:
             payload["measure_runs_override"] = self.measure_runs_override
@@ -681,6 +684,8 @@ def flatten_for_tsv(
                     "timing_status": "pending",
                     "retry_condition": "",
                     "notes": candidate.get("expected_effect", ""),
+                    "generator_model": candidate.get("generator_model", ""),
+                    "generator_session": candidate.get("generator_session", ""),
                 }
             )
     return out

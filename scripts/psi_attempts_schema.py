@@ -1,4 +1,4 @@
-"""Unified attempts.tsv schema for the Psi optimization harness.
+﻿"""Unified attempts.tsv schema for the Psi optimization harness.
 
 Three writers (``psi_auto_optimize.py``, ``psi_control_loop.py``, and the
 inline python heredoc in ``psi_headless_remote.sh``) historically carried
@@ -110,4 +110,20 @@ ATTEMPTS_FIELDNAMES: list[str] = [
     "confidence_ci_width_ms",
     "confidence_decisiveness",
     "confidence_sign_consistency",
+    # G2 decision constants (evidence schema).
+    "delta_min_ms_used",
+    "decisive_k",
+    "sign_min",
+    "escalation_steps",
+    # G3 naive-k1 counterfactual.
+    "naive_k1_first_delta_ms",
+    "naive_k1_would_accept",
+    # G4 environment fingerprint.
+    "host_id",
+    "env_class",
+    "control_stdev_ms",
+    "control_range_ms",
+    # G5 generator provenance.
+    "generator_model",
+    "generator_session",
 ]
