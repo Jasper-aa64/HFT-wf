@@ -777,6 +777,7 @@ from psi_control_loop import build_attempts  # noqa: E402
 from psi_timing_analysis import (  # noqa: E402
     PairedTimingEvidence,
     evidence_fields,
+    replication_verified_from_audits,
     summarize_paired_timing,
 )
 
@@ -809,6 +810,7 @@ _paired_pair_indexes = [pi for pi, _ in paired_control_rows]
 _paired_control_values = [ms for _, ms in paired_control_rows]
 _paired_candidate_values = [ms for _, ms in paired_candidate_rows]
 paired_evidence: PairedTimingEvidence | None = None
+candidate_replicated = False
 candidate_runner = os.environ.get("CANDIDATE_RUNNER", "").strip()
 paired_evidence_status = "present"
 paired_evidence_reason = ""
@@ -832,13 +834,32 @@ if (
     and _paired_candidate_values
     and len(_paired_control_values) == len(_paired_candidate_values)
 ):
+    _paired_deltas_for_audit = [
+        control_ms - candidate_ms
+        for control_ms, candidate_ms in zip(_paired_control_values, _paired_candidate_values, strict=False)
+    ]
+    _current_paired_stdev_ms = statistics.stdev(_paired_deltas_for_audit) if len(_paired_deltas_for_audit) > 1 else 0.0
+    _current_paired_range_ms = (
+        max(_paired_deltas_for_audit) - min(_paired_deltas_for_audit)
+        if len(_paired_deltas_for_audit) > 1
+        else 0.0
+    )
+    candidate_replicated = replication_verified_from_audits(
+        os.environ.get("CANDIDATE_REPLICATED", "").strip() == "1",
+        prior_recorded_at=os.environ.get("CANDIDATE_PRIOR_RECORDED_AT", "").strip(),
+        prior_stdev_ms=os.environ.get("CANDIDATE_PRIOR_STDEV_MS", "").strip(),
+        prior_range_ms=os.environ.get("CANDIDATE_PRIOR_RANGE_MS", "").strip(),
+        current_recorded_at=recorded_at,
+        current_stdev_ms=f"{_current_paired_stdev_ms:.6f}",
+        current_range_ms=f"{_current_paired_range_ms:.6f}",
+    )
     paired_evidence = summarize_paired_timing(
         _paired_control_values,
         _paired_candidate_values,
         build_pass=True,
         compare_pass=compare_pass,
         verdict_context=run_id,
-        replicated=os.environ.get("CANDIDATE_REPLICATED", "").strip() == "1",
+        replicated=candidate_replicated,
         change_class=os.environ.get("CHANGE_CLASS", "class_b").strip() or "class_b",
     )
     paired_evidence_status = "present"
@@ -879,7 +900,7 @@ attempt_rows = build_attempts(
     paired_evidence_by_target=paired_evidence_by_target or None,
 )
 if paired_evidence is not None and not paired_evidence_by_target:
-    paired_fields = evidence_fields(paired_evidence, replicated=os.environ.get("CANDIDATE_REPLICATED", "").strip() == "1", change_class=os.environ.get("CHANGE_CLASS", "class_b").strip() or "class_b")
+    paired_fields = evidence_fields(paired_evidence, replicated=candidate_replicated, change_class=os.environ.get("CHANGE_CLASS", "class_b").strip() or "class_b")
     target = os.environ.get("CANDIDATE_TARGET", "").strip() or "candidate_runner"
     candidate_id = os.environ.get("CANDIDATE_ID", "").strip() or "candidate_runner"
     lane = os.environ.get("CANDIDATE_LANE", "").strip() or "screening"
@@ -1138,7 +1159,7 @@ paired_block: dict[str, object] = {}
 paired_samples_block: list[dict[str, object]] = []
 paired_fields: dict[str, str] = {}
 if paired_evidence is not None:
-    paired_fields = evidence_fields(paired_evidence, replicated=os.environ.get("CANDIDATE_REPLICATED", "").strip() == "1", change_class=os.environ.get("CHANGE_CLASS", "class_b").strip() or "class_b")
+    paired_fields = evidence_fields(paired_evidence, replicated=candidate_replicated, change_class=os.environ.get("CHANGE_CLASS", "class_b").strip() or "class_b")
     for idx, pair_index in enumerate(_paired_pair_indexes):
         control_ms = _paired_control_values[idx]
         candidate_ms = _paired_candidate_values[idx]

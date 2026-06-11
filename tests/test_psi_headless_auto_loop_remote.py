@@ -14,6 +14,7 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 import psi_headless_auto_loop as auto_loop  # noqa: E402
+from psi_timing_analysis import replication_verified_from_audits  # noqa: E402
 
 
 class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
@@ -82,6 +83,9 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
                     "target": "handlerData.row_loop.stack",
                     "compare_status": "pass",
                     "verdict": "accepted_noisy_single",
+                    "recorded_at": "2026-05-29T00:00:00Z",
+                    "paired_stdev_ms": "50",
+                    "paired_range_ms": "120",
                 },
                 auto_loop.ATTEMPTS_FIELDS,
             )
@@ -107,6 +111,9 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
             self.assertIn("MEASURE_RUNS=24", calls[0])
             self.assertIn("NO_COMPARE_RUNS=1", calls[0])
             self.assertIn("CANDIDATE_REPLICATED=1", calls[0])
+            self.assertIn("CANDIDATE_PRIOR_RECORDED_AT=2026-05-29T00:00:00Z", calls[0])
+            self.assertIn("CANDIDATE_PRIOR_STDEV_MS=50", calls[0])
+            self.assertIn("CANDIDATE_PRIOR_RANGE_MS=120", calls[0])
 
     def test_candidate_replicated_flag_is_not_trusted_without_prior_evidence(self) -> None:
         with tempfile.TemporaryDirectory(prefix="psi_auto_loop_remote_") as raw_dir:
@@ -168,6 +175,127 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertEqual(batch_state["remote_host"], "devbox")
             self.assertIn("CANDIDATE_REPLICATED=''", calls[0])
+
+    def test_local_batch_passes_prior_replication_audit_env(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="psi_auto_loop_local_") as raw_dir:
+            run_dir = Path(raw_dir)
+            (run_dir / "logs").mkdir()
+            batch_script = run_dir / "psi_headless_remote.sh"
+            batch_script.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+            args = SimpleNamespace(
+                dry_run=False,
+                remote_host="",
+                batch_script=batch_script,
+                bash="bash",
+                measure_runs=24,
+                no_compare_runs=1,
+                remote_timeout_seconds=900,
+                replication_history="",
+                env_file="",
+                runner="",
+                config="",
+                output_dir="",
+                root="",
+                candidate_runner="",
+                build_dir="",
+            )
+            candidate = {
+                "candidate_id": "candidate",
+                "lane": "combination",
+                "target": "handlerData.row_loop.stack",
+                "touched_files": ["PsiFactorPipline/PsiReadWrite.cpp"],
+                "change_class": "class_b",
+            }
+            auto_loop.append_tsv_row(
+                run_dir / "attempts.tsv",
+                {
+                    "iteration": "0",
+                    "candidate_id": "candidate",
+                    "target": "handlerData.row_loop.stack",
+                    "compare_status": "pass",
+                    "verdict": "accepted_noisy_single",
+                    "recorded_at": "2026-05-29T00:00:00Z",
+                    "paired_stdev_ms": "50",
+                    "paired_range_ms": "120",
+                },
+                auto_loop.ATTEMPTS_FIELDS,
+            )
+            captured_env: dict[str, str] = {}
+
+            def fake_run(
+                command: list[str],
+                *,
+                cwd: Path,
+                env: dict[str, str],
+                stdout,
+                stderr,
+                timeout: int,
+            ) -> subprocess.CompletedProcess[str]:
+                captured_env.update(env)
+                iteration_dir = run_dir / "iterations" / "iter_001_candidate"
+                auto_loop.write_json(iteration_dir / "run_state.json", {"status": "ok"})
+                return subprocess.CompletedProcess(command, 0)
+
+            with mock.patch.object(auto_loop.subprocess, "run", side_effect=fake_run):
+                rc, _iter_dir, batch_state = auto_loop.call_remote_batch(args, run_dir, candidate, 1)
+
+            self.assertEqual(rc, 0)
+            self.assertTrue(batch_state["candidate_replication_detected"])
+            self.assertEqual(captured_env["CANDIDATE_REPLICATED"], "1")
+            self.assertEqual(captured_env["CANDIDATE_PRIOR_RECORDED_AT"], "2026-05-29T00:00:00Z")
+            self.assertEqual(captured_env["CANDIDATE_PRIOR_STDEV_MS"], "50")
+            self.assertEqual(captured_env["CANDIDATE_PRIOR_RANGE_MS"], "120")
+
+    def test_replication_env_is_verified_against_current_audit_after_measurement(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="psi_auto_loop_replication_") as raw_dir:
+            run_dir = Path(raw_dir)
+            auto_loop.append_tsv_row(
+                run_dir / "attempts.tsv",
+                {
+                    "iteration": "0",
+                    "candidate_id": "candidate",
+                    "target": "handlerData.row_loop.stack",
+                    "compare_status": "pass",
+                    "verdict": "accepted_noisy_single",
+                    "recorded_at": "2026-05-29T00:00:00Z",
+                    "paired_stdev_ms": "50",
+                    "paired_range_ms": "120",
+                },
+                auto_loop.ATTEMPTS_FIELDS,
+            )
+            args = SimpleNamespace(replication_history="", host_key="")
+            candidate = {
+                "candidate_id": "candidate",
+                "lane": "combination",
+                "target": "handlerData.row_loop.stack",
+                "touched_files": ["PsiFactorPipline/PsiReadWrite.cpp"],
+            }
+
+            env = auto_loop._candidate_replication_env(args, run_dir, candidate)
+
+            self.assertEqual(env["CANDIDATE_REPLICATED"], "1")
+            self.assertFalse(
+                replication_verified_from_audits(
+                    env["CANDIDATE_REPLICATED"] == "1",
+                    prior_recorded_at=env["CANDIDATE_PRIOR_RECORDED_AT"],
+                    prior_stdev_ms=env["CANDIDATE_PRIOR_STDEV_MS"],
+                    prior_range_ms=env["CANDIDATE_PRIOR_RANGE_MS"],
+                    current_recorded_at="2026-05-29T00:20:00Z",
+                    current_stdev_ms="900",
+                    current_range_ms="2200",
+                )
+            )
+            self.assertTrue(
+                replication_verified_from_audits(
+                    env["CANDIDATE_REPLICATED"] == "1",
+                    prior_recorded_at=env["CANDIDATE_PRIOR_RECORDED_AT"],
+                    prior_stdev_ms=env["CANDIDATE_PRIOR_STDEV_MS"],
+                    prior_range_ms=env["CANDIDATE_PRIOR_RANGE_MS"],
+                    current_recorded_at="2026-05-29T00:45:00Z",
+                    current_stdev_ms="900",
+                    current_range_ms="2200",
+                )
+            )
 
     def test_synced_candidate_uses_synced_same_source_control(self) -> None:
         with tempfile.TemporaryDirectory(prefix="psi_auto_loop_remote_") as raw_dir:
@@ -324,34 +452,13 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
                     candidate,
                     history_path=history_path,
                     host_key="devbox",
-                    current_audit={
-                        "recorded_at": "2026-05-29T00:45:00Z",
-                        "paired_stdev_ms": "900",
-                        "paired_range_ms": "2200",
-                    },
                 )
             )
 
-    def test_candidate_replication_requires_independent_weather_window(self) -> None:
+    def test_candidate_replication_requires_prior_audit_metadata(self) -> None:
         with tempfile.TemporaryDirectory(prefix="psi_auto_loop_remote_") as raw_dir:
             run_dir = Path(raw_dir) / "fresh_replication_run"
             run_dir.mkdir()
-            auto_loop.write_tsv(
-                run_dir / "timing_history.tsv",
-                [
-                    {
-                        "history_key": "current|control",
-                        "recorded_at": "2026-05-29T00:10:00Z",
-                        "run_id": "fresh_replication_run",
-                        "host_key": "devbox",
-                        "kind": "control",
-                        "target": "control baseline",
-                        "stdev_ms": "50",
-                        "range_ms": "120",
-                    }
-                ],
-                auto_loop.HISTORY_FIELDNAMES,
-            )
             history_path = Path(raw_dir) / "prior_timing_history.tsv"
             auto_loop.write_tsv(
                 history_path,
@@ -365,8 +472,6 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
                         "target": "handlerData.row_loop.stack",
                         "timing_verdict": "accepted_noisy_single",
                         "verdict": "accepted_noisy_single",
-                        "paired_stdev_ms": "50",
-                        "paired_range_ms": "120",
                     }
                 ],
                 auto_loop.HISTORY_FIELDNAMES,
@@ -384,11 +489,36 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
                     candidate,
                     history_path=history_path,
                     host_key="devbox",
-                    current_audit={
-                        "recorded_at": "2026-05-29T00:10:00Z",
-                        "paired_stdev_ms": "50",
-                        "paired_range_ms": "120",
-                    },
+                )
+            )
+
+    def test_candidate_replication_prior_audit_from_attempts_requires_metadata(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="psi_auto_loop_remote_") as raw_dir:
+            run_dir = Path(raw_dir)
+            auto_loop.write_tsv(run_dir / "attempts.tsv", [], auto_loop.ATTEMPTS_FIELDS)
+            auto_loop.append_tsv_row(
+                run_dir / "attempts.tsv",
+                {
+                    "iteration": "0",
+                    "candidate_id": "candidate",
+                    "target": "handlerData.row_loop.stack",
+                    "compare_status": "pass",
+                    "verdict": "accepted_noisy_single",
+                },
+                auto_loop.ATTEMPTS_FIELDS,
+            )
+            candidate = {
+                "candidate_id": "candidate",
+                "lane": "combination",
+                "target": "handlerData.row_loop.stack",
+                "touched_files": ["PsiFactorPipline/PsiReadWrite.cpp"],
+            }
+
+            self.assertFalse(
+                auto_loop._candidate_has_prior_replication(
+                    run_dir,
+                    candidate,
+                    host_key="devbox",
                 )
             )
 
@@ -426,11 +556,6 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
                     candidate,
                     history_path=history_path,
                     host_key="devbox",
-                    current_audit={
-                        "recorded_at": "2026-05-29T00:10:00Z",
-                        "paired_stdev_ms": "50",
-                        "paired_range_ms": "120",
-                    },
                 )
             )
 
@@ -764,6 +889,8 @@ class PsiHeadlessAutoLoopRemoteTests(unittest.TestCase):
                     "noise_flag": "NOISY",
                     "median_delta_ms": "7268.000",
                     "paired_deltas_ms": "7053,7564,6278",
+                    "paired_stdev_ms": "648.739",
+                    "paired_range_ms": "1286.000",
                     "bootstrap_ci_low_ms": "6937.000",
                     "bootstrap_ci_high_ms": "7643.500",
                     "permutation_p_value": "0.001000",

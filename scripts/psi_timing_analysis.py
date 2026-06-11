@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Paired timing analysis helpers for Psi headless optimization runs."""
 
 from __future__ import annotations
@@ -993,6 +993,33 @@ def independence_verified(audit_a: dict, audit_b: dict) -> bool:
     except (KeyError, ValueError):
         return False
     return bucket_a != bucket_b
+
+
+def replication_verified_from_audits(
+    asserted: bool,
+    *,
+    prior_recorded_at: str = "",
+    prior_stdev_ms: str = "",
+    prior_range_ms: str = "",
+    current_recorded_at: str = "",
+    current_stdev_ms: str = "",
+    current_range_ms: str = "",
+) -> bool:
+    """Verify a caller's replication assertion against prior/current audits."""
+
+    if not asserted:
+        return False
+    prior = {
+        "recorded_at": str(prior_recorded_at or ""),
+        "paired_stdev_ms": str(prior_stdev_ms or ""),
+        "paired_range_ms": str(prior_range_ms or ""),
+    }
+    current = {
+        "recorded_at": str(current_recorded_at or ""),
+        "paired_stdev_ms": str(current_stdev_ms or ""),
+        "paired_range_ms": str(current_range_ms or ""),
+    }
+    return independence_verified(prior, current)
 
 
 def evidence_fields(evidence: PairedTimingEvidence, *, change_class: str = "class_b", replicated: bool = False, host_id: str = "", env_class: str = "") -> dict[str, str]:

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Three-lane candidate generator for the Psi headless auto-loop.
 
 The generator consumes the durable evidence surface the harness already writes

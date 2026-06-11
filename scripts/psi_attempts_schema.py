@@ -1,4 +1,4 @@
-﻿"""Unified attempts.tsv schema for the Psi optimization harness.
+"""Unified attempts.tsv schema for the Psi optimization harness.
 
 Three writers (``psi_auto_optimize.py``, ``psi_control_loop.py``, and the
 inline python heredoc in ``psi_headless_remote.sh``) historically carried

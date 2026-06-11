@@ -20,6 +20,7 @@ from psi_timing_analysis import (  # noqa: E402
     independence_verified,
     judge_scorecard,
     naive_k1_counterfactual,
+    replication_verified_from_audits,
     sample_escalation_decision,
     summarize_paired_timing,
     threshold_consistency,
@@ -592,6 +593,52 @@ class ConfidenceTierIntegrationTests(unittest.TestCase):
         self.assertFalse(independence_verified(base, too_soon_different_bucket))
         self.assertTrue(independence_verified(base, different_bucket_later))
         self.assertFalse(independence_verified(base, {}))
+
+    def test_replication_verified_from_audits_requires_assertion_and_complete_independent_audits(self) -> None:
+        self.assertFalse(
+            replication_verified_from_audits(
+                False,
+                prior_recorded_at="2026-06-10T00:00:00Z",
+                prior_stdev_ms="50",
+                prior_range_ms="120",
+                current_recorded_at="2026-06-10T00:45:00Z",
+                current_stdev_ms="900",
+                current_range_ms="2200",
+            )
+        )
+        self.assertFalse(
+            replication_verified_from_audits(
+                True,
+                prior_recorded_at="2026-06-10T00:00:00Z",
+                prior_stdev_ms="50",
+                prior_range_ms="120",
+                current_recorded_at="",
+                current_stdev_ms="900",
+                current_range_ms="2200",
+            )
+        )
+        self.assertFalse(
+            replication_verified_from_audits(
+                True,
+                prior_recorded_at="2026-06-10T00:00:00Z",
+                prior_stdev_ms="50",
+                prior_range_ms="120",
+                current_recorded_at="2026-06-10T00:45:00Z",
+                current_stdev_ms="55",
+                current_range_ms="130",
+            )
+        )
+        self.assertTrue(
+            replication_verified_from_audits(
+                True,
+                prior_recorded_at="2026-06-10T00:00:00Z",
+                prior_stdev_ms="50",
+                prior_range_ms="120",
+                current_recorded_at="2026-06-10T00:45:00Z",
+                current_stdev_ms="900",
+                current_range_ms="2200",
+            )
+        )
 
 
 class PsiScorecardCharacterizationTests(unittest.TestCase):

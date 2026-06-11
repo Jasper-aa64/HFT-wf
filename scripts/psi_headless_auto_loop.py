@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Closed-loop Psi headless auto-loop controller.
 
 This script wraps the existing single-batch ``psi_headless_remote.sh`` executor
@@ -59,7 +59,7 @@ from psi_patch_queue import (
     set_status as set_patch_status,
     snapshot_worktree,
 )
-from psi_timing_analysis import TwapAdapter, independence_verified, sample_escalation_decision, validate_class_a
+from psi_timing_analysis import TwapAdapter, sample_escalation_decision, validate_class_a
 from psi_timing_history import (
     HISTORY_FIELDNAMES,
     default_host_key,
@@ -287,6 +287,8 @@ ATTEMPTS_FIELDS = [
     "twap_max_stress_regression_ms",
     "compare_result",
     "noise_flag",
+    "paired_stdev_ms",
+    "paired_range_ms",
     "verdict",
     "retry_condition",
     "stop_reason",
@@ -828,19 +830,32 @@ def _timeout_completed_process(command: list[str], timeout: int, *, text: bool =
     return subprocess.CompletedProcess(command, 124, stdout=stdout, stderr=stderr)
 
 
-def _candidate_has_prior_replication(
+def _row_replication_audit(row: dict[str, Any]) -> dict[str, str] | None:
+    recorded_at = str(row.get("recorded_at") or "").strip()
+    stdev_ms = str(row.get("paired_stdev_ms") or "").strip()
+    range_ms = str(row.get("paired_range_ms") or "").strip()
+    if not recorded_at or not stdev_ms or not range_ms:
+        return None
+    return {
+        "recorded_at": recorded_at,
+        "paired_stdev_ms": stdev_ms,
+        "paired_range_ms": range_ms,
+    }
+
+
+def _candidate_prior_replication_audit(
     run_dir: Path,
     candidate: dict[str, Any],
     *,
     history_path: Path | None = None,
     host_key: str = "",
-    current_audit: dict[str, str] | None = None,
-) -> bool:
-    """Return true only when local artifacts show prior positive evidence.
+) -> dict[str, str] | None:
+    """Return the prior audit tuple for a positive evidence row, if complete.
 
     `replicated` is a cross-run history property, not a candidate-authored
     label. Prefer timing_history.tsv so prepared replication runs that use a
-    fresh run directory can still see a prior independent locked run.
+    fresh run directory can still see a prior locked run. Independence is
+    verified later by the remote side after the current run's audit exists.
     """
 
     candidate_id = str(candidate.get("candidate_id") or "").strip()
@@ -869,15 +884,9 @@ def _candidate_has_prior_replication(
         same_target = target and (row_target == target or row_target.startswith(f"{target}|"))
         if not same_target:
             continue
-        if current_audit is None:
-            return True
-        prior_audit = {
-            "recorded_at": str(row.get("recorded_at") or ""),
-            "paired_stdev_ms": str(row.get("paired_stdev_ms") or ""),
-            "paired_range_ms": str(row.get("paired_range_ms") or ""),
-        }
-        if independence_verified(prior_audit, current_audit):
-            return True
+        audit = _row_replication_audit(row)
+        if audit is not None:
+            return audit
 
     # Backward-compatible fallback for non-prepared long runs that continue in
     # the same run dir. Do not treat infra/screening rows as prior evidence.
@@ -890,17 +899,40 @@ def _candidate_has_prior_replication(
         same_candidate = candidate_id and str(row.get("candidate_id") or "").strip() == candidate_id
         same_target = target and str(row.get("target") or "").strip() == target
         if same_candidate or same_target:
-            return True
-    return False
+            audit = _row_replication_audit(row)
+            if audit is not None:
+                return audit
+    return None
 
 
-def _candidate_replication_detected(args: argparse.Namespace, run_dir: Path, candidate: dict[str, Any]) -> bool:
-    return _candidate_has_prior_replication(
+def _candidate_has_prior_replication(
+    run_dir: Path,
+    candidate: dict[str, Any],
+    *,
+    history_path: Path | None = None,
+    host_key: str = "",
+) -> bool:
+    return _candidate_prior_replication_audit(
+        run_dir,
+        candidate,
+        history_path=history_path,
+        host_key=host_key,
+    ) is not None
+
+
+def _candidate_replication_env(args: argparse.Namespace, run_dir: Path, candidate: dict[str, Any]) -> dict[str, str]:
+    audit = _candidate_prior_replication_audit(
         run_dir,
         candidate,
         history_path=Path(args.replication_history) if getattr(args, "replication_history", "") else None,
         host_key=getattr(args, "host_key", "") or "",
     )
+    return {
+        "CANDIDATE_REPLICATED": "1" if audit is not None else "",
+        "CANDIDATE_PRIOR_RECORDED_AT": "" if audit is None else audit["recorded_at"],
+        "CANDIDATE_PRIOR_STDEV_MS": "" if audit is None else audit["paired_stdev_ms"],
+        "CANDIDATE_PRIOR_RANGE_MS": "" if audit is None else audit["paired_range_ms"],
+    }
 
 
 def _sync_candidate_workspace_to_remote(
@@ -1253,6 +1285,8 @@ def call_remote_batch(
     if args.remote_host:
         return call_ssh_remote_batch(args, run_dir, iteration_dir, candidate, iteration)
 
+    replication_env = _candidate_replication_env(args, run_dir, candidate)
+    candidate_replication_detected = bool(replication_env["CANDIDATE_REPLICATED"])
     env = os.environ.copy()
     env.update(
         {
@@ -1266,8 +1300,8 @@ def call_remote_batch(
             "CANDIDATE_LANE": candidate["lane"],
             "CANDIDATE_TARGET": candidate["target"],
             "CANDIDATE_TOUCHED_FILES": "|".join(candidate.get("touched_files", [])),
-            "CANDIDATE_REPLICATED": "1" if candidate_replication_detected else "",
             "CHANGE_CLASS": str(candidate.get("change_class", "class_b")),
+            **replication_env,
         }
     )
     for name in ("ROOT", "ENV_FILE", "BUILD_DIR", "RUNNER", "CANDIDATE_RUNNER", "CONFIG", "OUTPUT_DIR"):
@@ -1324,7 +1358,8 @@ def call_ssh_remote_batch(
     remote_ws = ""
     remote_control_ws = ""
     sync_reason = ""
-    candidate_replication_detected = _candidate_replication_detected(args, run_dir, candidate)
+    replication_env = _candidate_replication_env(args, run_dir, candidate)
+    candidate_replication_detected = bool(replication_env["CANDIDATE_REPLICATED"])
     candidate_ws = candidate.get("candidate_workspace")
     if candidate_ws:
         remote_ws, sync_reason = _sync_candidate_workspace_to_remote(args, run_dir, candidate)
@@ -1383,8 +1418,8 @@ def call_ssh_remote_batch(
         "CANDIDATE_LANE": candidate["lane"],
         "CANDIDATE_TARGET": candidate["target"],
         "CANDIDATE_TOUCHED_FILES": "|".join(candidate.get("touched_files", [])),
-        "CANDIDATE_REPLICATED": "1" if candidate_replication_detected else "",
         "CHANGE_CLASS": str(candidate.get("change_class", "class_b")),
+        **replication_env,
     }
     for name in ("ENV_FILE", "RUNNER", "CONFIG", "OUTPUT_DIR"):
         value = getattr(args, name.lower(), None)
@@ -1792,6 +1827,8 @@ def record_attempt(
         "twap_max_stress_regression_ms": twap_stats.get("max_stress_regression_ms_text", ""),
         "compare_result": batch_state.get("compare_status", ""),
         "noise_flag": batch_state.get("noise_flag", ""),
+        "paired_stdev_ms": batch_state.get("paired_stdev_ms", ""),
+        "paired_range_ms": batch_state.get("paired_range_ms", ""),
         "verdict": verdict,
         "retry_condition": retry_condition,
         "stop_reason": stop_reason,
