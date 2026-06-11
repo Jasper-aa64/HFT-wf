@@ -67,7 +67,7 @@ def build_ledger_row(
         "control_range_ms": _first(batch_state, "control_range_ms"),
         "generator_model": _first(candidate, "generator_model") or _first(batch_state, "generator_model"),
         "generator_session": _first(candidate, "generator_session") or _first(batch_state, "generator_session"),
-        "replicated": _replicated_text(batch_state, verdict),
+        "replicated": _replicated_text(batch_state),
         "artifact_path": _clean(artifact_path or _first(batch_state, "comparison_summary_path", "artifact_path")),
         "recorded_at": _first(batch_state, "recorded_at"),
     }
@@ -185,7 +185,7 @@ def _judge_kind(batch_state: dict[str, Any]) -> str:
     return ""
 
 
-def _replicated_text(batch_state: dict[str, Any], verdict: str) -> str:
+def _replicated_text(batch_state: dict[str, Any]) -> str:
     raw = _clean(batch_state.get("replicated"))
     if raw:
         return raw.lower()
